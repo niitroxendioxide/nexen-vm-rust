@@ -27,6 +27,9 @@ pub enum OpCode {
     OpGreaterEqualThan = 0x15,
     OpJumpIfTrue = 0x16,
     OpJumpIfFalse = 0x17,
+    OpFunctionCall = 0x18,
+    OpReturn = 0x19,
+    OpNativeFnCall = 0x1A,
 }
 
 #[derive(Debug)]
@@ -60,6 +63,9 @@ impl TryFrom<u8> for OpCode {
             0x15 => Ok(OpCode::OpGreaterEqualThan),
             0x16 => Ok(OpCode::OpJumpIfTrue),
             0x17 => Ok(OpCode::OpJumpIfFalse),
+            0x18 => Ok(OpCode::OpFunctionCall),
+            0x19 => Ok(OpCode::OpReturn),
+            0x1A => Ok(OpCode::OpNativeFnCall),
             _ => Err(OpInvalid)
         }
     }
@@ -69,10 +75,12 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
     match operator {
         OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpAdd | OpCode::OpSub | OpCode::OpDiv | OpCode::OpMul 
         | OpCode::OpEq | OpCode::OpNotEq | OpCode::OpGreaterEqualThan | OpCode::OpGreaterThan 
-        | OpCode::OpLessEqualThan | OpCode::OpLessThan | OpCode::OpPushScope | OpCode::OpPopScope | OpCode::OpVoid => {
+        | OpCode::OpLessEqualThan | OpCode::OpLessThan | OpCode::OpPushScope | OpCode::OpPopScope | OpCode::OpVoid | OpCode::OpReturn => {
             println!("{:?}", operator);
         },
-        OpCode::OpPushU8 | OpCode::OpLoadLocal | OpCode::OpLoadConst | OpCode::OpStoreLocal => {
+
+        // 1 byte ahead
+        OpCode::OpPushU8 | OpCode::OpLoadLocal | OpCode::OpLoadConst | OpCode::OpStoreLocal | OpCode::OpFunctionCall => {
             let next_val = match instruction_list.get(*index) {
                 Some(val) => val,
                 None => return,
@@ -81,7 +89,9 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             *index += 1;
             println!("{:?} {}", operator, next_val);
         },
-        OpCode::OpPushU16 | OpCode::OpJump | OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue => {
+
+        // 2 bytes ahead
+        OpCode::OpPushU16 | OpCode::OpJump | OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue | OpCode::OpNativeFnCall => {
             let byte1 = match instruction_list.get(*index) {
                 Some(val) => val,
                 None => return,
@@ -95,9 +105,16 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             *index += 1;
 
-            let new_val = u16::from_le_bytes([*byte1, *byte2]);
-            println!("{:?} {}", operator, new_val);
+            if (operator == OpCode::OpNativeFnCall) {
+                println!("{:?} {}, {}", operator, *byte1, *byte2);
+            } else {
+                let new_val = u16::from_le_bytes([*byte1, *byte2]);
+                println!("{:?} {}", operator, new_val);
+            }
+
         }, 
+
+        // 8 bytes ahead
         OpCode::OpPushNum => {
             let mut new_vec: Vec<u8> = Vec::new();
             for _ in 0..8 {

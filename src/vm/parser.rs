@@ -1,6 +1,6 @@
-use std::io::{Error as IoError};
+use std::{fmt::Display, io::Error as IoError, rc::Rc};
 
-use super::program::{Program, Constant};
+use super::program::{Program, Constant, FunctionBody};
 
 static LANG_SIGNATURE: u32 = 0x6E786F21;
 static LANG_BEGIN: u16 = 0xFFFF;
@@ -14,11 +14,22 @@ pub enum FileParsingError {
     NotEnoughData,
     ProgramHasNoEntry,
     InvalidConstantDefined,
+    InvalidDeclaredFunction(String),
 }
 
 impl From<IoError> for FileParsingError {
     fn from(err: IoError) -> Self {
         FileParsingError::FileError(err)
+    }
+}
+
+impl Display for FileParsingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileParsingError::FileError(er) => write!(formatter, "{:?}", er),
+            FileParsingError::InvalidDeclaredFunction(reason) => write!(formatter, "{}", reason),
+            generic_error => write!(formatter, "{:?}", generic_error),
+        }
     }
 }
 
@@ -44,40 +55,77 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
 
     let version_major = read_u16_le(&read_bytes, 4..6)?;
     let version_minor = read_u16_le(&read_bytes, 6..8)?;
-    let _program_size = read_u32_le(&read_bytes, 8..12)?;
-    let constant_count = read_u32_le(&read_bytes, 12..16)?;
+    let version_patch = read_u16_le(&read_bytes, 8..10)?;
+    let _program_size = read_u32_le(&read_bytes, 10..14)?;
+    let constant_count = read_u32_le(&read_bytes, 14..18)?;
+    let function_count = read_u32_le(&read_bytes, 18..22)?;
+    let registers_used = match read_bytes.get(22) {
+        Some(v) => *v,
+        None => return Err(FileParsingError::NotEnoughData),
+    };
 
-    let mut idx = 16;
+    let mut idx = 23;
     let mut constant_index = 0;
+    let mut function_index = 0;
     let mut constants: Vec<Constant> = Vec::new();
+    let mut functions: Vec<Constant> = Vec::new();
     let mut program_instructions = Vec::new();
 
     loop {
+        let cur_byte = read_bytes.get(idx).ok_or( FileParsingError::NotEnoughData )?;
         if constant_index < constant_count && constant_count > 0 {
-            if let Some(byte) = read_bytes.get(idx) {
-                if *byte != 0x02 {
-                    break;
-                } 
-
-                idx += 1;
-
-                let str_len = read_u32_le(&read_bytes, idx..idx + 4)?;
-                idx += 4;
-
-                let end_idx = ((idx as u32) + str_len) as usize;
-                let str_slice = &read_bytes[idx..end_idx];
-                constants.push(Constant::from(str_slice));
-
-                idx += (str_len - 1) as usize;
-            } else {
+            if *cur_byte != 0x02 {
                 return Err( FileParsingError::InvalidConstantDefined );
             }
 
-            constant_index += 1;
             idx += 1;
+
+            let str_len = read_u32_le(&read_bytes, idx..idx + 4)?;
+            idx += 4;
+
+            let end_idx = ((idx as u32) + str_len) as usize;
+            let str_slice = &read_bytes[idx..end_idx];
+            constants.push(Constant::from(str_slice));
+
+            constant_index += 1;
+            idx += str_len as usize;
             
             continue;
-        };
+        }
+
+        if function_index < function_count && function_count > 0 {
+            if *cur_byte != 0x03 {
+                println!("Data: c_count{constant_index}, c_given{constant_count}");
+                let str = format!("Function tag is incorrect ({cur_byte}). At index: {idx}");
+                return Err( FileParsingError::InvalidDeclaredFunction(str) )
+            }
+
+            idx += 1;
+            let fn_len = read_u32_le(&read_bytes, idx..idx+4).map_err(|_| FileParsingError::InvalidDeclaredFunction("Function has no length".to_string()) )? as usize;
+            idx += 4;
+            let arg_count = read_bytes.get(idx).ok_or(FileParsingError::InvalidDeclaredFunction("Argument count is not specified".to_string()))?;
+            idx += 1;
+            let reg_count = read_bytes.get(idx).ok_or(FileParsingError::InvalidDeclaredFunction("Function has no register count specified".to_string()))?;
+            idx += 1;
+
+            let end_idx = idx + fn_len;
+            let fn_slice = match read_bytes.get(idx..end_idx) {
+                Some(slice) => slice,
+                None => {
+                    let len = read_bytes.len();
+                    let str = format!("Function length outside of range, length: {fn_len}, from {idx} to {end_idx}, byte length: {len}");
+                    return Err( FileParsingError::InvalidDeclaredFunction(str) );
+                }
+            };//[idx..end_idx];
+
+            let new_fn = FunctionBody::new(fn_len as u32, *arg_count, *reg_count, &fn_slice);
+            functions.push(Constant::FunctionConstant(new_fn));
+            
+            function_index += 1;
+            idx += fn_len;
+
+            continue;
+        }
         
         let next_two = read_u16_le(&read_bytes, idx..idx+2)?;
         if next_two == LANG_BEGIN {
@@ -87,11 +135,16 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
             break;
         }
 
+        for i in 0..function_index {
+            if let Some(v) = functions.get(i as usize) {
+                println!("{}", v);   
+            }
+        }
+
         return Err( FileParsingError::ProgramHasNoEntry )
     }
 
-    let new_program = Program::new(version_major, version_minor, program_instructions, constants);
-    //println!("{}", new_program);
+    let new_program = Program::new(version_major, version_minor, version_patch, Rc::new(program_instructions), functions, constants, registers_used);
 
     Ok(new_program)
 }

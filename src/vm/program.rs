@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, io::{BufWriter, Stdout}, rc::Rc};
 use super::evaluate::EvaluateError;
 
 type ReadRange = std::ops::Range<usize>;
@@ -29,6 +29,20 @@ fn read_le<T: FromLeBytes<N>, const N: usize>(bytes: &[u8], range: ReadRange) ->
     Ok(T::from_le_bytes(array))
 }
 
+#[derive(Debug, Clone)]
+pub struct FunctionBody {
+    pub length: u32,
+    pub argument_count: u8,
+    pub registers_used: u8,
+    pub instructions: Rc<Vec<u8>>,
+}
+
+impl FunctionBody {
+    pub fn new(length: u32, argument_count: u8, registers_used: u8, instructions: &[u8]) -> Self {
+        FunctionBody { length, argument_count, instructions: Rc::new(Vec::from(instructions)), registers_used }
+    }
+}
+
 
 #[repr(u8)]
 #[derive(Debug)]
@@ -36,6 +50,7 @@ pub enum Constant {
     _BoolConstant = 0x0,
     _NumberConstant = 0x1,
     StringConstant(String) = 0x02,
+    FunctionConstant(FunctionBody) = 0x03,
 }
 
 #[derive(Clone)]
@@ -55,7 +70,7 @@ impl From<&[u8]> for Constant {
 impl From<&Constant> for Value {
     fn from(value: &Constant) -> Self {
         match value {
-            Constant::StringConstant(str_val) => Value::String(str_val.to_owned()),
+            Constant::StringConstant(str_val) => Value::String(str_val.clone()),
             _=> Value::Number(0.0),
         }
     }
@@ -65,26 +80,43 @@ pub struct Stack {
     pub values: Vec<Value>,
 }
 
-pub struct Scope {
+/*pub struct Scope {
     pub locals: HashMap<u8, Value>,
-    pub parent: Option<Box<Scope>>,
+    pub parent: Option<Rc<RefCell<Scope>>>,
+    pub current_stack: Stack,
+} */
+
+pub struct CallFrame {
+    pub program_counter: usize,
+    pub instructions: Rc<Vec<u8>>,
+    //pub scope: Rc<RefCell<Scope>>,
+    pub reg_base: usize,
+    pub stack_base: usize,
 }
 
 pub struct Program {
     pub version_major: u16,
     pub version_minor: u16,
+    pub version_patch: u16,
     pub constant_count: usize,
     pub constants: Vec<Constant>,
-    pub instructions: Vec<u8>,
-    pub program_counter: usize,
-    pub current_scope: Box<Scope>,
-    pub current_stack: Stack,
+    pub functions: Vec<Constant>,
+    pub call_stack: Vec<CallFrame>,
+    pub stack: Vec<Value>,
+    pub registers: Vec<Value>,
+    pub std_out: BufWriter<Stdout>,
+    //pub current_scope: Rc<RefCell<Scope>>,
+    pub running_state: bool,
 }
 
 impl Display for Program {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "Program \x1b[0;33m<Version=\x1b[1;33m[{}.{}]\x1b[0;33m, Constants=\x1b[1;33m[{}]\x1b[0;33m, ProgramLength=\x1b[1;33m[{}b]\x1b[0;33m>\x1b[0m", 
-        self.version_major, self.version_minor, self.constant_count, self.instructions.len())?;
+        let program_len = match self.call_stack.first() {
+            Some(v) => v.instructions.len(),
+            None => 0,
+        };
+        write!(formatter, "Nexen Program \x1b[0;33m<Version: \x1b[1;33m{}.{}.{}\x1b[0;33m, Constants: \x1b[1;33m{}\x1b[0;33m, Program Length: \x1b[1;33m{}B\x1b[0;33m>\x1b[0m", 
+        self.version_major, self.version_minor, self.version_patch, self.constant_count, program_len)?;
         Ok(())
     }
 }
@@ -92,9 +124,9 @@ impl Display for Program {
 impl Display for Value {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Number(raw_val) => write!(formatter, "\x1b[0;33mRuntime<{}>\x1b[0m", raw_val)?,
-            Value::String(raw_str) => write!(formatter, "\x1b[0;33mRuntime<\"{}\">\x1b[0m", raw_str)?,
-            Value::Bool(raw_bool) => write!(formatter, "\x1b[0;33mRuntime<{}>\x1b[0m", raw_bool)?,
+            Value::Number(raw_val) => write!(formatter, "\x1b[0;33mRuntime<Number, {}>\x1b[0m", raw_val)?,
+            Value::String(raw_str) => write!(formatter, "\x1b[0;33mRuntime<String, \"{}\">\x1b[0m", raw_str)?,
+            Value::Bool(raw_bool) => write!(formatter, "\x1b[0;33mRuntime<Bool, {}>\x1b[0m", raw_bool)?,
         }
         Ok(())
     }
@@ -105,6 +137,7 @@ impl Display for Constant {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Constant::StringConstant(val) => write!(formatter, "\x1b[2;32mString\x1b[0;32m<{}>\x1b[2;32m\x1b[0m", val)?,
+            Constant::FunctionConstant(body) => write!(formatter, "\x1b[2;34mFunction\x1b[0;34m<len: {}, args: {}, body: {:?}>\x1b[2;34m\x1b[0m", body.length, body.argument_count, body.instructions)?,
             _ => write!(formatter, "{:?}", self)?,
         }
         Ok(())
@@ -126,10 +159,11 @@ impl Stack {
 }
 
 
-impl Scope {
-    pub fn new(parent: Option<Box<Scope>>) -> Self {
+/*impl Scope {
+    pub fn new(parent: Option<Rc<RefCell<Scope>>>) -> Self {
         Scope {
-            locals: HashMap::new(),
+            locals: HashMap::with_capacity(64),
+            current_stack: Stack::new(),
             parent,
         }
     }
@@ -146,41 +180,22 @@ impl Scope {
             None => Err( EvaluateError::UndefinedLocalVariable ),
         }
     }
-}
 
-impl Program {
-    pub fn new(version_major: u16, version_minor: u16, instructions: Vec<u8>, constants: Vec<Constant>) -> Self {
-        Program { 
-            version_major, 
-            version_minor, 
-            constant_count: constants.len(), 
-            constants,
-            instructions, 
-            program_counter: 0,
-            current_scope: Box::new(Scope::new(None)),
-            current_stack: Stack::new(),
-        }
-    }
-
-    pub fn load_constant(&self, index: usize) -> Result<Value, EvaluateError> {
-        match self.constants.get(index) {
-            Some(constant) => {
-                Ok(Value::from(constant))
-            },
-            None => Err(EvaluateError::UndefinedConstant),
-        }
-    }
-
-    pub fn push_to_stack(&mut self, value: Value) {
-        println!("Pushed value: {} to stack", value);
+    pub fn push(&mut self, value: Value) {
         self.current_stack.push(value);
     }
 
-    pub fn pop_stack(&mut self) -> Result<Value, EvaluateError> {
+    pub fn pop(&mut self) -> Result<Value, EvaluateError> {
         match self.current_stack.pop() {
             Some(val) => Ok(val),
             None => Err(EvaluateError::StackEndReached)
         }
+    }
+} */
+
+impl CallFrame {
+    pub fn new(instructions: Rc<Vec<u8>>, stack_base: usize, reg_base: usize) -> Self {
+        CallFrame { program_counter: 0, instructions, stack_base, reg_base }
     }
 
     pub fn read_u32(&mut self) -> Result<u32, EvaluateError> {
@@ -214,5 +229,113 @@ impl Program {
         };
         self.program_counter+=1;
         value
+    }
+
+    pub fn advance(&mut self) -> Option<u8> {
+        if self.program_counter >= self.instructions.len() {
+            return None;
+        }
+
+        let current_byte = unsafe {
+            *self.instructions.get_unchecked(self.program_counter)
+        };
+
+        self.program_counter += 1;
+        Some(current_byte)
+    }
+}
+
+impl Program {
+    pub fn new(version_major: u16, version_minor: u16, version_patch: u16, instructions: Rc<Vec<u8>>, functions: Vec<Constant>, constants: Vec<Constant>, registers_used: u8) -> Self {
+        let first_call_frame = CallFrame::new(instructions, 0, 0);
+        let mut call_stack_vec = Vec::with_capacity(50);
+        let mut registers = Vec::with_capacity(128);
+        registers.resize(registers_used as usize, Value::Number(0.0));
+        call_stack_vec.push(first_call_frame);
+        
+        Program { 
+            version_major, 
+            version_minor, 
+            version_patch,
+            constant_count: constants.len(), 
+            constants,
+            functions,
+            call_stack: call_stack_vec,
+            running_state: false,
+            registers: registers,
+            stack: Vec::with_capacity(64),
+            std_out: BufWriter::new(std::io::stdout())
+        }
+    }
+
+    pub fn load_constant(&self, index: usize) -> Result<Value, EvaluateError> {
+        match self.constants.get(index) {
+            Some(constant) => {
+                Ok(Value::from(constant))
+            },
+            None => Err(EvaluateError::UndefinedConstant),
+        }
+    }
+
+    pub fn load_function(&self, index: usize) -> Result<&Constant, EvaluateError> {
+        match self.functions.get(index) {
+            Some(constant) => {
+                Ok(constant)
+            },
+            None => Err(EvaluateError::UndefinedFunction),
+        }
+    }
+
+    pub fn get_call_frame_mut(&mut self) -> Result<&mut CallFrame, EvaluateError> {
+        match self.call_stack.last_mut() {
+            Some(cframe) => Ok(cframe),
+            None => Err(EvaluateError::NoCallFrameAvailable),
+        }
+    }
+
+    pub fn get_call_frame_idx(&mut self) -> usize {
+        self.call_stack.len() - 1
+    }
+
+    pub fn is_running(&mut self) -> bool {
+        self.running_state
+    }
+
+    pub fn set_running(&mut self, state: bool) {
+        self.running_state = state;
+    }
+
+    pub fn push(&mut self, value: Value) -> Result<(), EvaluateError> {
+        self.stack.push(value);
+        //self.scope.borrow_mut().push(value);
+        Ok(())
+    }
+
+    pub fn pop(&mut self) -> Result<Value, EvaluateError> {
+        match self.stack.pop() {
+            Some(val) => Ok(val),
+            None => Err( EvaluateError::StackEndReached ),
+        }
+        //self.scope.borrow_mut().pop()
+    }
+
+    pub fn set_local(&mut self, idx: usize, value: Value) -> Result<(), EvaluateError> {
+        let reg_base = self.get_call_frame_mut()?.reg_base;
+        if (reg_base + idx) >= self.registers.len() {
+            self.registers.reserve(128);
+        }
+
+        self.registers[reg_base + idx] = value;
+        Ok(())
+        //self.scope.borrow_mut().set((idx + self.base) as u8, value);
+    }
+
+    pub fn get_local(&mut self, idx: usize) -> Result<&Value, EvaluateError> {
+        let reg_base = self.get_call_frame_mut()?.reg_base;
+        match self.registers.get(reg_base + idx) {
+            Some(val) => Ok(val),
+            None => Err( EvaluateError::UndefinedLocalVariable )
+        }
+        //self.scope.borrow_mut().get((idx + self.base) as u8)
     }
 }
