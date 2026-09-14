@@ -1,18 +1,20 @@
-#![allow(unused)]
+// #![allow(unused)]
 mod vm;
 
 //
 use std::{env, fmt::Error, io::Write, time::Instant};
 use vm::opcodes::{OpCode, print_op_from_iter};
-use crate::vm::{evaluate, parser::{FileParsingError, parse_file}};
+use crate::vm::{evaluate, parser::{FileParsingError, parse_file}, program::Constant};
 
 struct ProgramSettings {
     pub display_runtime_time: bool,
+    pub include_flush_time: bool,
+    pub preview_bytecode: bool,
 }
 
 impl ProgramSettings {
     pub fn new() -> Self {
-        ProgramSettings { display_runtime_time: false }
+        ProgramSettings { display_runtime_time: false, preview_bytecode: false, include_flush_time: true }
     }
 }
 
@@ -47,12 +49,24 @@ fn main() {
             None => return,
         };
 
-        for parameter in args {
+        let mut iterator = args.iter().peekable();
+
+        while let Some(parameter) = iterator.next() {
             match parameter.as_str() {
-                "--time" => new_program_settings.display_runtime_time = true,
-                _=>{},
+                "--time" | "-t" => {
+                    new_program_settings.display_runtime_time = true;
+
+                    if let Some(next_param) = iterator.peek() {
+                        if next_param.as_str() == "noflush" {
+                            iterator.next(); 
+                            new_program_settings.include_flush_time = false; 
+                        }
+                    }
+                },
+                "--bytes" | "-b" => new_program_settings.preview_bytecode = true,
+                _ => {},
             }
-        }
+}
         
         let mut program = match parse_file(file_input.to_owned()) {
             Ok(program_instance) => program_instance,
@@ -66,21 +80,83 @@ fn main() {
             }
         };
 
+        if new_program_settings.preview_bytecode {
+            //let mut idx = 0;
+            let mut fn_idx = 0;
+            for function in &program.functions {
+                if let Constant::FunctionConstant(body) = function {
+                    println!("\n__function_F{fn_idx}:");
+                    let mut idx = 0;
+                    loop {
+                        if let Err(e) = parse_instruction(&body.instructions, &mut idx) {
+                            println!("Error reading bytecode: {}", e);
+                        }
+
+                        if idx >= body.instructions.len() {
+                            break;
+                        }
+                    }
+                }
+                fn_idx += 1;
+            }
+
+            println!("\n__start:");
+            let callframe = match program.get_call_frame_mut() {
+                Ok(v) => v,
+                Err(_) => {println!("Bytecode preview is not available"); return;},
+            };
+            loop {
+                if let Err(e) = parse_instruction(&callframe.instructions, &mut callframe.program_counter) {
+                    println!("Error reading bytecode: {}", e);
+                };
+
+                if callframe.program_counter >= callframe.instructions.len() {
+                    break;
+                }
+            }
+
+            return;
+        }
+
         let start = Instant::now();
 
         if let Err(er) = evaluate::evaluate(&mut program) {
-            println!("\x1b[0;31m[Runtime Error]\x1b[0m Error when evaluating program:\n> \x1b[0;31m{:?}\x1b[0m", er);
+            println!("\x1b[0;31m[Runtime Error]\x1b[0m Error when evaluating program:\n\x1b[1;31m> {}\x1b[0m", er);
+            if let Ok(cf) = program.get_call_frame_mut() {
+                match cf.instructions.get(cf.program_counter) {
+                    Some(instr) => {
+                        if let Ok(op) = OpCode::try_from(*instr) {
+                            cf.program_counter += 1;
+                            print!("> On Line:\n|-> ");
+                            print_op_from_iter(op, &cf.instructions, &mut cf.program_counter)
+                        }
+                    },
+                    None => (),
+                };
+
+                if cf.function_id >= 0 {
+                    println!("|-> In function F{}", cf.function_id);
+                }
+
+                println!("|-> Program pointer at: {}", cf.program_counter);
+                //println!("> Registers used: {}", program.registers.len());
+            }
         }
+
+        let mut duration = start.elapsed();
 
         match program.std_out.flush() {
             Ok(_) => (),
             Err(e) => println!("Error when flushing to stdout: {}", e),
         }
 
-        let duration = start.elapsed();
+        if new_program_settings.include_flush_time {
+            duration = start.elapsed();
+        }
+        
 
         if new_program_settings.display_runtime_time {
-            println!("Program ran in: {}us", duration.as_secs_f64() * 1000000.0);
+            println!("\n\x1b[1;32m[Nexen]\x1b[0m Program ran in: \x1b[1;32m{}us\x1b[0m \x1b[3;36m(microseconds)\x1b[0m", duration.as_secs_f64() * 1000000.0);
         }
     }
 }

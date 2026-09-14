@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::{convert::TryFrom, fmt::Display};
 
 #[derive(Debug, PartialEq)]
 #[repr(u8)]
@@ -16,8 +16,8 @@ pub enum OpCode {
     OpPushU8 = 0x0A,
     OpPush1 = 0x0B,
     OpPush0 = 0x0C,
-    OpPushScope = 0x0D,
-    OpPopScope = 0x0E,
+    //OpPushScope = 0x0D,
+    //OpPopScope = 0x0E,
     OpJump = 0x0F,
     OpEq = 0x10,
     OpNotEq = 0x11,
@@ -52,8 +52,8 @@ impl TryFrom<u8> for OpCode {
             0x0A => Ok(OpCode::OpPushU8),
             0x0B => Ok(OpCode::OpPush1),
             0x0C => Ok(OpCode::OpPush0),
-            0x0D => Ok(OpCode::OpPushScope),
-            0x0E => Ok(OpCode::OpPopScope),
+            //0x0D => Ok(OpCode::OpPushScope),
+            //0x0E => Ok(OpCode::OpPopScope),
             0x0F => Ok(OpCode::OpJump),
             0x10 => Ok(OpCode::OpEq),
             0x11 => Ok(OpCode::OpNotEq),
@@ -71,27 +71,138 @@ impl TryFrom<u8> for OpCode {
     }
 }
 
+impl Display for OpCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpCode::OpVoid => write!(f, "NO_OP"),
+            OpCode::OpAdd => write!(f, "ADD"),
+            OpCode::OpSub => write!(f, "SUB"),
+            OpCode::OpMul => write!(f, "MUL"),
+            OpCode::OpDiv => write!(f, "DIV"),
+            OpCode::OpEq => write!(f, "EQ"),
+            OpCode::OpNotEq => write!(f, "NOT_EQ"),
+            OpCode::OpLessEqualThan => write!(f, "LEQT"),
+            OpCode::OpGreaterEqualThan => write!(f, "GEQT"),
+            OpCode::OpGreaterThan => write!(f, "GT"),
+            OpCode::OpLessThan => write!(f, "LT"),
+            OpCode::OpFunctionCall => write!(f, "CALL"),
+            OpCode::OpLoadConst => write!(f, "LOAD_CONST"),
+            OpCode::OpLoadLocal => write!(f, "LOAD_LOCAL"),
+            OpCode::OpStoreLocal => write!(f, "STORE_LOCAL"),
+            OpCode::OpPush0 => write!(f, "PUSH_0"),
+            OpCode::OpPush1 => write!(f, "PUSH_1"),
+            OpCode::OpPushU8 => write!(f, "PUSH_U8"),
+            OpCode::OpPushU16 => write!(f, "PUSH_U16"),
+            OpCode::OpPushNum => write!(f, "PUSH_F64"),
+            OpCode::OpReturn => write!(f, "RETURN"),
+            OpCode::OpNativeFnCall => write!(f, "NATIVE_CALL"),
+            OpCode::OpJump => write!(f, "JUMP"),
+            OpCode::OpJumpIfFalse => write!(f, "JUMP_IF_FALSE"),
+            OpCode::OpJumpIfTrue => write!(f, "JUMP_IF_TRUE"),
+
+            #[allow(unreachable_patterns)]
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
 pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut usize) {
     match operator {
-        OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpAdd | OpCode::OpSub | OpCode::OpDiv | OpCode::OpMul 
-        | OpCode::OpEq | OpCode::OpNotEq | OpCode::OpGreaterEqualThan | OpCode::OpGreaterThan 
-        | OpCode::OpLessEqualThan | OpCode::OpLessThan | OpCode::OpPushScope | OpCode::OpPopScope | OpCode::OpVoid | OpCode::OpReturn => {
-            println!("{:?}", operator);
+        OpCode::OpVoid => println!("{}", operator),
+        OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpReturn => {
+            let reg1 = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            println!("{} R{}", operator, reg1);
         },
 
+        OpCode::OpAdd | OpCode::OpSub | OpCode::OpDiv | OpCode::OpMul
+        | OpCode::OpEq | OpCode::OpNotEq | OpCode::OpGreaterEqualThan | OpCode::OpGreaterThan 
+        | OpCode::OpLessEqualThan | OpCode::OpLessThan => {
+            let reg1 = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            
+            let reg2 = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let reg3 = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            println!("{}, R{}, R{}, R{}", operator, reg1, reg2, reg3);
+        }
+
         // 1 byte ahead
-        OpCode::OpPushU8 | OpCode::OpLoadLocal | OpCode::OpLoadConst | OpCode::OpStoreLocal | OpCode::OpFunctionCall => {
+        OpCode::OpPushU8 | OpCode::OpLoadLocal | OpCode::OpLoadConst | OpCode::OpStoreLocal => {
+            let register = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            
             let next_val = match instruction_list.get(*index) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
-            println!("{:?} {}", operator, next_val);
+            println!("{} R{}, {}", operator, register, next_val);
         },
 
+        OpCode::OpNativeFnCall => {
+            let reg = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            let b1 = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+            *index += 1;
+
+            let b2 = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+            *index += 1;
+
+            println!("{} R{}, {}, {}", operator, reg, b1, b2);
+        }
+
+        OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue => {
+            let reg = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            let u16val = match instruction_list.get(*index..*index+2) {
+                Some(val) => u16::from_le_bytes(val.try_into().unwrap_or([0u8, 2])),
+                None => return,
+            }; 
+
+            *index += 2;
+            println!("{} R{}, {}", operator, reg, u16val);
+        }
+
         // 2 bytes ahead
-        OpCode::OpPushU16 | OpCode::OpJump | OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue | OpCode::OpNativeFnCall => {
+        OpCode::OpPushU16 | OpCode::OpJump => {
             let byte1 = match instruction_list.get(*index) {
                 Some(val) => val,
                 None => return,
@@ -105,14 +216,30 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             *index += 1;
 
-            if (operator == OpCode::OpNativeFnCall) {
-                println!("{:?} {}, {}", operator, *byte1, *byte2);
+            if operator == OpCode::OpNativeFnCall {
+                println!("{} {}, {}", operator, *byte1, *byte2);
             } else {
                 let new_val = u16::from_le_bytes([*byte1, *byte2]);
-                println!("{:?} {}", operator, new_val);
+                println!("{} {}", operator, new_val);
             }
 
         }, 
+
+        OpCode::OpFunctionCall => {
+            let reg = match instruction_list.get(*index) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            let u32val = match instruction_list.get(*index..*index+4) {
+                Some(val) => u32::from_le_bytes(val.try_into().unwrap()),
+                None => return,
+            }; 
+
+            *index += 4;
+            println!("{} R{}, F{}", operator, reg, u32val);
+        }
 
         // 8 bytes ahead
         OpCode::OpPushNum => {
@@ -133,7 +260,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             };
 
             let new_val = f64::from_le_bytes(fixed_length_array);
-            println!("{:?} {}", operator, new_val);
+            println!("{}, {}", operator, new_val);
         },
     }
 }

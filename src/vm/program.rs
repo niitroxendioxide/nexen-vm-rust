@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Display, io::{BufWriter, Stdout}, rc::Rc};
+use std::{cell::RefCell, fmt::Display, io::{BufWriter, Stdout}, rc::Rc};
 use super::evaluate::EvaluateError;
 
 type ReadRange = std::ops::Range<usize>;
@@ -49,21 +49,25 @@ impl FunctionBody {
 pub enum Constant {
     _BoolConstant = 0x0,
     _NumberConstant = 0x1,
-    StringConstant(String) = 0x02,
+    StringConstant(Rc<str>) = 0x02,
     FunctionConstant(FunctionBody) = 0x03,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub enum Value {
     Number(f64),
-    String(String),
+    String(Rc<str>),
     Bool(bool),
+    Array(Rc<RefCell<Vec<Value>>>),
+    Nil,
 }
 
 impl From<&[u8]> for Constant {
     fn from(value: &[u8]) -> Self {
-        let new_value = String::from_utf8(value.to_vec()).unwrap_or_default();
-        Constant::StringConstant(new_value)
+        let converted_string = String::from_utf8(value.to_vec()).unwrap_or_default();
+        let rc_string: Rc<str> = converted_string.into();
+        Constant::StringConstant(rc_string)
     }
 }
 
@@ -76,9 +80,7 @@ impl From<&Constant> for Value {
     }
 }
 
-pub struct Stack {
-    pub values: Vec<Value>,
-}
+
 
 /*pub struct Scope {
     pub locals: HashMap<u8, Value>,
@@ -91,7 +93,8 @@ pub struct CallFrame {
     pub instructions: Rc<Vec<u8>>,
     //pub scope: Rc<RefCell<Scope>>,
     pub reg_base: usize,
-    pub stack_base: usize,
+    pub reg_ret: usize,
+    pub function_id: i64,
 }
 
 pub struct Program {
@@ -127,6 +130,8 @@ impl Display for Value {
             Value::Number(raw_val) => write!(formatter, "\x1b[0;33mRuntime<Number, {}>\x1b[0m", raw_val)?,
             Value::String(raw_str) => write!(formatter, "\x1b[0;33mRuntime<String, \"{}\">\x1b[0m", raw_str)?,
             Value::Bool(raw_bool) => write!(formatter, "\x1b[0;33mRuntime<Bool, {}>\x1b[0m", raw_bool)?,
+            Value::Array(refv) => write!(formatter, "\x1b[0;33mRuntime<Array[{}]>\x1b[0m", refv.borrow().len())?,
+            Value::Nil => write!(formatter, "\x1b[0;33mRuntime<Nil>\x1b[0m")?,
         }
         Ok(())
     }
@@ -144,58 +149,9 @@ impl Display for Constant {
     }
 }
 
-impl Stack {
-    pub fn new() -> Self {
-        Stack { values: vec![] }
-    }
-
-    pub fn push(&mut self, value: Value) {
-        self.values.push(value);
-    }
-
-    pub fn pop(&mut self) -> Option<Value> {
-        self.values.pop()
-    }
-}
-
-
-/*impl Scope {
-    pub fn new(parent: Option<Rc<RefCell<Scope>>>) -> Self {
-        Scope {
-            locals: HashMap::with_capacity(64),
-            current_stack: Stack::new(),
-            parent,
-        }
-    }
-
-    pub fn set(&mut self, idx: u8, value: Value) {
-        self.locals.insert(idx, value);
-        
-        return;
-    }
-
-    pub fn get(&mut self, idx: u8) -> Result<Value, EvaluateError> {
-        match self.locals.get(&idx) {
-            Some(val) => Ok(val.clone()),
-            None => Err( EvaluateError::UndefinedLocalVariable ),
-        }
-    }
-
-    pub fn push(&mut self, value: Value) {
-        self.current_stack.push(value);
-    }
-
-    pub fn pop(&mut self) -> Result<Value, EvaluateError> {
-        match self.current_stack.pop() {
-            Some(val) => Ok(val),
-            None => Err(EvaluateError::StackEndReached)
-        }
-    }
-} */
-
 impl CallFrame {
-    pub fn new(instructions: Rc<Vec<u8>>, stack_base: usize, reg_base: usize) -> Self {
-        CallFrame { program_counter: 0, instructions, stack_base, reg_base }
+    pub fn new(instructions: Rc<Vec<u8>>, function_id: i64, reg_base: usize, reg_ret: usize) -> Self {
+        CallFrame { program_counter: 0, instructions, function_id, reg_base, reg_ret }
     }
 
     pub fn read_u32(&mut self) -> Result<u32, EvaluateError> {
@@ -210,7 +166,7 @@ impl CallFrame {
         value
     }
 
-    pub fn read_i16(&mut self) -> Result<i16, EvaluateError> {
+    pub fn _read_i16(&mut self) -> Result<i16, EvaluateError> {
         let value = read_le(&self.instructions, self.program_counter .. self.program_counter+2);
         self.program_counter+=2;
         value
@@ -246,11 +202,11 @@ impl CallFrame {
 }
 
 impl Program {
-    pub fn new(version_major: u16, version_minor: u16, version_patch: u16, instructions: Rc<Vec<u8>>, functions: Vec<Constant>, constants: Vec<Constant>, registers_used: u8) -> Self {
-        let first_call_frame = CallFrame::new(instructions, 0, 0);
+    pub fn new(version_major: u16, version_minor: u16, version_patch: u16, instructions: Rc<Vec<u8>>, functions: Vec<Constant>, constants: Vec<Constant>, _registers_used: u8) -> Self {
+        let first_call_frame = CallFrame::new(instructions, -1, 0, 0);
         let mut call_stack_vec = Vec::with_capacity(50);
-        let mut registers = Vec::with_capacity(128);
-        registers.resize(registers_used as usize, Value::Number(0.0));
+        let mut registers = Vec::with_capacity(256);
+        registers.resize(256, Value::Nil);
         call_stack_vec.push(first_call_frame);
         
         Program { 
@@ -273,7 +229,7 @@ impl Program {
             Some(constant) => {
                 Ok(Value::from(constant))
             },
-            None => Err(EvaluateError::UndefinedConstant),
+            None => Err( EvaluateError::UndefinedConstant(index as u8) ),
         }
     }
 
@@ -293,7 +249,7 @@ impl Program {
         }
     }
 
-    pub fn get_call_frame_idx(&mut self) -> usize {
+    pub fn _get_call_frame_idx(&mut self) -> usize {
         self.call_stack.len() - 1
     }
 
@@ -305,7 +261,7 @@ impl Program {
         self.running_state = state;
     }
 
-    pub fn push(&mut self, value: Value) -> Result<(), EvaluateError> {
+    pub fn _push(&mut self, value: Value) -> Result<(), EvaluateError> {
         self.stack.push(value);
         //self.scope.borrow_mut().push(value);
         Ok(())
