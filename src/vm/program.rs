@@ -22,6 +22,10 @@ impl FromLeBytes<2> for i16 {
     fn from_le_bytes(bytes: [u8; 2]) -> Self { i16::from_le_bytes(bytes) }
 }
 
+impl FromLeBytes<4> for i32 {
+    fn from_le_bytes(bytes: [u8; 4]) -> Self { i32::from_le_bytes(bytes) }
+}
+
 fn read_le<T: FromLeBytes<N>, const N: usize>(bytes: &[u8], range: ReadRange) -> Result<T, EvaluateError> {
     let slice = bytes.get(range).ok_or(EvaluateError::OutOfRange)?;
     let array: [u8; N] = slice.try_into().map_err(|_| EvaluateError::OutOfRange)?;
@@ -54,7 +58,7 @@ pub enum Constant {
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Number(f64),
     String(Rc<str>),
@@ -68,6 +72,18 @@ impl From<&[u8]> for Constant {
         let converted_string = String::from_utf8(value.to_vec()).unwrap_or_default();
         let rc_string: Rc<str> = converted_string.into();
         Constant::StringConstant(rc_string)
+    }
+}
+
+impl Into<String> for Value {
+    fn into(self) -> String {
+        match self {
+            Value::Array(_) => "<array>".to_string(),
+            Value::Bool(val) => val.to_string(),
+            Value::Nil => "nil".to_string(),
+            Value::Number(f) => f.to_string(),
+            Value::String(str) => String::from(str.clone().to_string()),
+        }
     }
 }
 
@@ -89,7 +105,7 @@ impl From<&Constant> for Value {
 } */
 
 pub struct CallFrame {
-    pub program_counter: usize,
+    pub program_counter: i64,
     pub instructions: Rc<Vec<u8>>,
     //pub scope: Rc<RefCell<Scope>>,
     pub reg_base: usize,
@@ -107,6 +123,7 @@ pub struct Program {
     pub call_stack: Vec<CallFrame>,
     pub stack: Vec<Value>,
     pub registers: Vec<Value>,
+    // pub actual_pointer: i128,
     pub std_out: BufWriter<Stdout>,
     //pub current_scope: Rc<RefCell<Scope>>,
     pub running_state: bool,
@@ -155,31 +172,42 @@ impl CallFrame {
     }
 
     pub fn read_u32(&mut self) -> Result<u32, EvaluateError> {
-        let value = read_le(&self.instructions, self.program_counter .. self.program_counter+4);
+        let range = self.program_counter as usize .. (self.program_counter as usize)+4;
+        let value = read_le(&self.instructions, range);
         self.program_counter+=4;
         value
     }
 
     pub fn read_f64(&mut self) -> Result<f64, EvaluateError> {
-        let value = read_le(&self.instructions, self.program_counter .. self.program_counter+8);
+        let range = self.program_counter as usize .. (self.program_counter as usize)+8;
+        let value = read_le(&self.instructions, range);
         self.program_counter+=8;
         value
     }
 
     pub fn _read_i16(&mut self) -> Result<i16, EvaluateError> {
-        let value = read_le(&self.instructions, self.program_counter .. self.program_counter+2);
+        let range = self.program_counter as usize .. (self.program_counter as usize)+2;
+        let value = read_le(&self.instructions, range);
         self.program_counter+=2;
         value
     }
 
     pub fn read_u16(&mut self) -> Result<u16, EvaluateError> {
-        let value = read_le(&self.instructions, self.program_counter .. self.program_counter+2);
+        let range = self.program_counter as usize .. (self.program_counter as usize)+2;
+        let value = read_le(&self.instructions, range);
         self.program_counter+=2;
         value
     }
 
+    pub fn read_i32(&mut self) -> Result<i32, EvaluateError> {
+        let range = self.program_counter as usize .. (self.program_counter as usize)+4;
+        let value = read_le(&self.instructions, range);
+        self.program_counter+=4;
+        value
+    }
+
     pub fn read_u8(&mut self) -> Result<u8, EvaluateError> {
-        let value = match self.instructions.get(self.program_counter) {
+        let value = match self.instructions.get(self.program_counter as usize) {
             Some(val) => Ok(*val),
             None => Err(EvaluateError::OutOfRange),
         };
@@ -188,13 +216,11 @@ impl CallFrame {
     }
 
     pub fn advance(&mut self) -> Option<u8> {
-        if self.program_counter >= self.instructions.len() {
+        if self.program_counter as usize >= self.instructions.len() {
             return None;
         }
 
-        let current_byte = unsafe {
-            *self.instructions.get_unchecked(self.program_counter)
-        };
+        let current_byte = unsafe {*self.instructions.get_unchecked(self.program_counter as usize)};
 
         self.program_counter += 1;
         Some(current_byte)

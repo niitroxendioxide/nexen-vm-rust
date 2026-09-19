@@ -18,7 +18,7 @@ pub enum EvaluateError {
     UndefinedFunction,
     NoCallFrameAvailable,
     NotAFunction,
-    CrossValueOperation,
+    CrossValueOperation(OpCode, u8, u8),
     UnsupportedOperation,
     RustIOError(String),
 
@@ -32,6 +32,8 @@ impl Display for EvaluateError {
         match self {
             EvaluateError::RustIOError(str) => write!(f, "IOError: {str}"),
             EvaluateError::UndefinedConstant(val) => write!(f, "UndefinedConstant: {val}"),
+            EvaluateError::CrossValueOperation(op, reg1, reg2) => write!(f, "Cross Value Operation: {}, R{}, R{}",
+            op, reg1, reg2),
             generic => write!(f, "{:?}", generic),
         }
     }
@@ -70,6 +72,8 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let target_reg = program.get_call_frame_mut()?.read_u8()? as usize;
                 let left_reg = program.get_call_frame_mut()?.read_u8()? as usize;
                 let right_reg = program.get_call_frame_mut()?.read_u8()? as usize;
+                //let byte_end = program.get_call_frame_mut()?.program_counter as usize - 1;
+                // println!("Got registers, used positions: {}, {}, {}, {}", byte_end - 3, byte_end - 2, byte_end - 1, byte_end);
 
                 if oper == OpCode::OpEq {
                     let lval = program.get_local(left_reg)?.clone();
@@ -96,12 +100,12 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 } else {
                     let lval = match program.get_local(left_reg)? {
                         Value::Number(n) => *n, 
-                        _ => return Err(EvaluateError::CrossValueOperation),
+                        _ => return Err(EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8) ),
                     };
 
                     let rval = match program.get_local(right_reg)? {
                         Value::Number(n) => *n,
-                        _ => return Err(EvaluateError::CrossValueOperation),
+                        _ => return Err(EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8) ),
                     };
 
                     // println!("Left {}, Right: {}, Op: {:?}", lval, rval, oper);
@@ -160,27 +164,32 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
             },
 
             OpCode::OpLoadConst => {
+                // println!("At index: {}", program.get_call_frame_mut()?.program_counter - 1);
                 let register = program.get_call_frame_mut()?.read_u8()? as usize;
                 let arg = program.get_call_frame_mut()?.read_u8()? as usize;
-                // println!("Program has: {} constants", program.constants.len());
                 let value = program.load_constant(arg)?;
                 program.set_local(register, value)?;
             },
 
             OpCode::OpJump => {
                 let call_frame = program.get_call_frame_mut()?;
-                let arg = call_frame.read_u16()?;
-                call_frame.program_counter += arg as usize;
+                let arg = call_frame.read_i32()? as i64;
+                call_frame.program_counter += arg;
+
+                /*println!("Jumped back by: {}", arg);
+                if let Some(v) = call_frame.instructions.get(call_frame.program_counter as usize) {
+                    println!("At byte {}, pos: {}\n", v, call_frame.program_counter);
+                } */
             },
 
             OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue => {
                 let reg = program.get_call_frame_mut()?.read_u8()? as usize;
-                let arg = program.get_call_frame_mut()?.read_u16()?;
+                let arg = program.get_call_frame_mut()?.read_i32()? as i64;
                 let value = program.get_local(reg)?;
                 let jump = if oper == OpCode::OpJumpIfFalse { is_true(value) == false } else { is_true(value) == true };
                 if jump {
                     let call_frame = program.get_call_frame_mut()?;
-                    call_frame.program_counter += arg as usize;
+                    call_frame.program_counter += arg;
                 }
             },
 

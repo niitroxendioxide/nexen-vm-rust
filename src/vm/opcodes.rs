@@ -97,8 +97,8 @@ impl Display for OpCode {
             OpCode::OpReturn => write!(f, "RETURN"),
             OpCode::OpNativeFnCall => write!(f, "NATIVE_CALL"),
             OpCode::OpJump => write!(f, "JUMP"),
-            OpCode::OpJumpIfFalse => write!(f, "JUMP_IF_FALSE"),
-            OpCode::OpJumpIfTrue => write!(f, "JUMP_IF_TRUE"),
+            OpCode::OpJumpIfFalse => write!(f, "JUMP_NEQ"),
+            OpCode::OpJumpIfTrue => write!(f, "JUMP_EQ"),
 
             #[allow(unreachable_patterns)]
             _ => write!(f, "{:?}", self),
@@ -106,11 +106,11 @@ impl Display for OpCode {
     }
 }
 
-pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut usize) {
+pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut i64) {
     match operator {
         OpCode::OpVoid => println!("{}", operator),
         OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpReturn => {
-            let reg1 = match instruction_list.get(*index) {
+            let reg1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
@@ -122,21 +122,21 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
         OpCode::OpAdd | OpCode::OpSub | OpCode::OpDiv | OpCode::OpMul
         | OpCode::OpEq | OpCode::OpNotEq | OpCode::OpGreaterEqualThan | OpCode::OpGreaterThan 
         | OpCode::OpLessEqualThan | OpCode::OpLessThan => {
-            let reg1 = match instruction_list.get(*index) {
+            let reg1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
             
-            let reg2 = match instruction_list.get(*index) {
+            let reg2 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
 
-            let reg3 = match instruction_list.get(*index) {
+            let reg3 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
@@ -147,14 +147,14 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
         // 1 byte ahead
         OpCode::OpPushU8 | OpCode::OpLoadLocal | OpCode::OpLoadConst | OpCode::OpStoreLocal => {
-            let register = match instruction_list.get(*index) {
+            let register = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
             
-            let next_val = match instruction_list.get(*index) {
+            let next_val = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
@@ -164,19 +164,19 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
         },
 
         OpCode::OpNativeFnCall => {
-            let reg = match instruction_list.get(*index) {
+            let reg = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
-            let b1 = match instruction_list.get(*index) {
+            let b1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
             *index += 1;
 
-            let b2 = match instruction_list.get(*index) {
+            let b2 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
@@ -185,31 +185,42 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             println!("{} R{}, {}, {}", operator, reg, b1, b2);
         }
 
+        OpCode::OpJump => {
+            let range = *index as usize..*index as usize+4;
+            let i32val = match instruction_list.get(range) {
+                Some(val) => i32::from_le_bytes(val.try_into().unwrap()),
+                None => return,
+            }; 
+            *index += 4;
+            println!("{} {}", operator, i32val);
+        }
+
         OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue => {
-            let reg = match instruction_list.get(*index) {
+            let reg = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
-            let u16val = match instruction_list.get(*index..*index+2) {
-                Some(val) => u16::from_le_bytes(val.try_into().unwrap_or([0u8, 2])),
+            let range = *index as usize..*index as usize+4;
+            let i32val = match instruction_list.get(range) {
+                Some(val) => i32::from_le_bytes(val.try_into().unwrap()),
                 None => return,
             }; 
 
-            *index += 2;
-            println!("{} R{}, {}", operator, reg, u16val);
+            *index += 4;
+            println!("{} R{}, {}", operator, reg, i32val);
         }
 
         // 2 bytes ahead
-        OpCode::OpPushU16 | OpCode::OpJump => {
-            let byte1 = match instruction_list.get(*index) {
+        OpCode::OpPushU16 => {
+            let byte1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
-            let byte2 = match instruction_list.get(*index) {
+            let byte2 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
@@ -226,13 +237,13 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
         }, 
 
         OpCode::OpFunctionCall => {
-            let reg = match instruction_list.get(*index) {
+            let reg = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
             };
 
             *index += 1;
-            let u32val = match instruction_list.get(*index..*index+4) {
+            let u32val = match instruction_list.get(*index as usize..*index as usize+4) {
                 Some(val) => u32::from_le_bytes(val.try_into().unwrap()),
                 None => return,
             }; 
@@ -245,7 +256,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
         OpCode::OpPushNum => {
             let mut new_vec: Vec<u8> = Vec::new();
             for _ in 0..8 {
-                let byte1 = match instruction_list.get(*index) {
+                let byte1 = match instruction_list.get(*index as usize) {
                     Some(val) => val,
                     None => return,
                 };

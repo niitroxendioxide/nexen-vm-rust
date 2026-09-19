@@ -18,8 +18,8 @@ impl ProgramSettings {
     }
 }
 
-fn parse_instruction(instruction_list: &Vec<u8>, index: &mut usize) -> Result<(), Error> {
-    let value = match instruction_list.get(*index) {
+fn parse_instruction(instruction_list: &Vec<u8>, index: &mut i64) -> Result<(), Error> {
+    let value = match instruction_list.get(*index as usize) {
         Some(val) => val.clone(),
         None => return Err(Error),
     };
@@ -90,9 +90,10 @@ fn main() {
                     loop {
                         if let Err(e) = parse_instruction(&body.instructions, &mut idx) {
                             println!("Error reading bytecode: {}", e);
+                            break;
                         }
 
-                        if idx >= body.instructions.len() {
+                        if (idx as usize) >= body.instructions.len() {
                             break;
                         }
                     }
@@ -108,9 +109,10 @@ fn main() {
             loop {
                 if let Err(e) = parse_instruction(&callframe.instructions, &mut callframe.program_counter) {
                     println!("Error reading bytecode: {}", e);
+                    break;
                 };
 
-                if callframe.program_counter >= callframe.instructions.len() {
+                if (callframe.program_counter as usize) >= callframe.instructions.len() {
                     break;
                 }
             }
@@ -123,11 +125,12 @@ fn main() {
         if let Err(er) = evaluate::evaluate(&mut program) {
             println!("\x1b[0;31m[Runtime Error]\x1b[0m Error when evaluating program:\n\x1b[1;31m> {}\x1b[0m", er);
             if let Ok(cf) = program.get_call_frame_mut() {
-                match cf.instructions.get(cf.program_counter) {
+                let begin_progc = cf.program_counter;
+                match cf.instructions.get(cf.program_counter as usize) {
                     Some(instr) => {
                         if let Ok(op) = OpCode::try_from(*instr) {
                             cf.program_counter += 1;
-                            print!("> On Line:\n|-> ");
+                            print!("> \x1b[3;30mOn Line:\x1b[0m\n|-> ");
                             print_op_from_iter(op, &cf.instructions, &mut cf.program_counter)
                         }
                     },
@@ -138,7 +141,18 @@ fn main() {
                     println!("|-> In function F{}", cf.function_id);
                 }
 
-                println!("|-> Program pointer at: {}", cf.program_counter);
+                println!("|-> Program pointer at: {}", begin_progc);
+                println!("> \x1b[3;30mRegisters:\x1b[0m");
+
+                for (idx, value) in program.registers.iter().enumerate() {
+                    if let crate::vm::program::Value::Nil = value {
+                        continue;
+                    }
+
+                    println!("|-> Register {}: {}", idx, value);
+                }
+
+                println!("")
                 //println!("> Registers used: {}", program.registers.len());
             }
         }
