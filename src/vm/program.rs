@@ -41,6 +41,11 @@ pub struct FunctionBody {
     pub instructions: Rc<Vec<u8>>,
 }
 
+#[derive(Debug)]
+pub struct VMStruct {
+    pub values: Vec<Value>,
+}
+
 impl FunctionBody {
     pub fn new(length: u32, argument_count: u8, registers_used: u8, instructions: &[u8]) -> Self {
         FunctionBody { length, argument_count, instructions: Rc::new(Vec::from(instructions)), registers_used }
@@ -64,6 +69,7 @@ pub enum Value {
     String(Rc<str>),
     Bool(bool),
     Array(Rc<RefCell<Vec<Value>>>),
+    Struct(Rc<RefCell<VMStruct>>),
     Nil,
 }
 
@@ -83,6 +89,7 @@ impl Into<String> for Value {
             Value::Nil => "nil".to_string(),
             Value::Number(f) => f.to_string(),
             Value::String(str) => String::from(str.clone().to_string()),
+            Value::Struct(_) => "<struct>".to_string(),
         }
     }
 }
@@ -148,6 +155,7 @@ impl Display for Value {
             Value::String(raw_str) => write!(formatter, "\x1b[0;33mRuntime<String, \"{}\">\x1b[0m", raw_str)?,
             Value::Bool(raw_bool) => write!(formatter, "\x1b[0;33mRuntime<Bool, {}>\x1b[0m", raw_bool)?,
             Value::Array(refv) => write!(formatter, "\x1b[0;33mRuntime<Array[{}]>\x1b[0m", refv.borrow().len())?,
+            Value::Struct(_) => write!(formatter, "\x1b[0;33mRuntime<Struct>\x1b[0m")?,
             Value::Nil => write!(formatter, "\x1b[0;33mRuntime<Nil>\x1b[0m")?,
         }
         Ok(())
@@ -316,6 +324,15 @@ impl Program {
         let reg_base = self.get_call_frame_mut()?.reg_base;
         match self.registers.get(reg_base + idx) {
             Some(val) => Ok(val),
+            None => Err( EvaluateError::UndefinedLocalVariable )
+        }
+        //self.scope.borrow_mut().get((idx + self.base) as u8)
+    }
+
+    pub fn take_local(&mut self, idx: usize) -> Result<Value, EvaluateError> {
+        let reg_base = self.get_call_frame_mut()?.reg_base;
+        match self.registers.get_mut(reg_base + idx) {
+            Some(val) => Ok(std::mem::replace(val, Value::Nil)),
             None => Err( EvaluateError::UndefinedLocalVariable )
         }
         //self.scope.borrow_mut().get((idx + self.base) as u8)

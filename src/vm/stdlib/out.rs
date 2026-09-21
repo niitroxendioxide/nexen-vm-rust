@@ -12,6 +12,10 @@ pub fn tostring(value: &Value) -> Value {
         Value::Number(val) => Value::String(val.to_string().into()),
         Value::String(t) => Value::String(t.clone()),
         Value::Nil => Value::String(Rc::from("nil")),
+        Value::Struct(vec) => {
+            let ptrfm = format!("{:p}", vec.as_ptr());
+            Value::String(Rc::from(ptrfm))
+        },
         Value::Array(vec) => {
             let ptrfm = format!("{:p}", vec.as_ptr());
             Value::String(Rc::from(ptrfm))

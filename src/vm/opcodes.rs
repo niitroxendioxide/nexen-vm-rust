@@ -30,6 +30,11 @@ pub enum OpCode {
     OpFunctionCall = 0x18,
     OpReturn = 0x19,
     OpNativeFnCall = 0x1A,
+    OpPushArray = 0x1B,
+    OpPushDict = 0x1C,
+    OpDictSet = 0x1D,
+    OpNewStruct = 0x1E,
+    OpLoadField = 0x1F,
 }
 
 #[derive(Debug)]
@@ -66,6 +71,12 @@ impl TryFrom<u8> for OpCode {
             0x18 => Ok(OpCode::OpFunctionCall),
             0x19 => Ok(OpCode::OpReturn),
             0x1A => Ok(OpCode::OpNativeFnCall),
+            0x1B => Ok(OpCode::OpPushArray),
+            0x1C => Ok(OpCode::OpPushDict),
+            0x1D => Ok(OpCode::OpDictSet),
+            0x1E => Ok(OpCode::OpNewStruct),
+            0x1F => Ok(OpCode::OpLoadField),
+            // 0x20 => Ok(),
             _ => Err(OpInvalid)
         }
     }
@@ -99,6 +110,8 @@ impl Display for OpCode {
             OpCode::OpJump => write!(f, "JUMP"),
             OpCode::OpJumpIfFalse => write!(f, "JUMP_NEQ"),
             OpCode::OpJumpIfTrue => write!(f, "JUMP_EQ"),
+            OpCode::OpLoadField => write!(f, "LOAD_FIELD"),
+            OpCode::OpNewStruct => write!(f, "NEW_STRUCT"),
 
             #[allow(unreachable_patterns)]
             _ => write!(f, "{:?}", self),
@@ -109,7 +122,7 @@ impl Display for OpCode {
 pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut i64) {
     match operator {
         OpCode::OpVoid => println!("{}", operator),
-        OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpReturn => {
+        OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpReturn | OpCode::OpPushArray| OpCode::OpDictSet | OpCode::OpPushDict => {
             let reg1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
@@ -144,6 +157,49 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             *index += 1;
             println!("{}, R{}, R{}, R{}", operator, reg1, reg2, reg3);
         }
+
+        OpCode::OpNewStruct => {
+            let register = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let size = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            println!("{}, R{}, [{}]", operator, register, size);
+        },
+
+        OpCode::OpLoadField => {
+            let reg_dest = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let field_reg = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let field_id = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            println!("{}, R{}, R{}, [{}]", operator, reg_dest, field_reg, field_id);
+        },
 
         // 1 byte ahead
         OpCode::OpPushU8 | OpCode::OpLoadLocal | OpCode::OpLoadConst | OpCode::OpStoreLocal => {

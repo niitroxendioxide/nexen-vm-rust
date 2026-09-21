@@ -1,7 +1,8 @@
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::rc::Rc;
 
-use crate::vm::program::{CallFrame, Constant, Value};
+use crate::vm::program::{CallFrame, Constant, VMStruct, Value};
 use crate::vm::stdlib;
 
 use super::program::Program;
@@ -11,6 +12,7 @@ use super::opcodes::OpCode;
 pub enum EvaluateError {
     OutOfRange,
     InvalidOperation,
+    UnknownInstruction,
     StackEndReached,
     InvalidRegisterIndex,
     UndefinedConstant(u8),
@@ -265,25 +267,41 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let new_call_frame = CallFrame::new(instructions, fn_idx as i64, new_reg_base, start_reg);
                 
                 program.call_stack.push(new_call_frame);
-
-                /*let stack_base = program.stack.len();
-                let reg_base = program.registers.len();
-                let new_size = reg_base + fn_reg_count;
-                program.registers.resize(new_size, Value::Number(0.0));
-
-                let new_call_frame = CallFrame::new(instructions, stack_base, reg_base, start_reg);
-                println!("Callframe register: {start_reg}");
-
-                program.call_stack.push(new_call_frame);
-
-                for idx in (0..arg_count).rev() {
-                    println!("indexing at: {}, and setting at: {}", start_reg + idx, idx + reg_base);
-                    let local_val = program.get_local(start_reg + idx)?.clone();
-                    program.set_local(idx, local_val)?;
-                } */
             }
 
-            _ => {}//println!("\x1b[3;30mEvaluating\x1b[0m \x1b[1;29mByte<{:#04x}>\x1b[0m", current_byte),
+            OpCode::OpLoadField => {
+                let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let struct_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let field_loaded  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let value = match program.get_local(struct_reg)? {
+                    Value::Struct(str_ref) => {
+                        match str_ref.borrow_mut().values.get(field_loaded) {
+                            Some(v) => v.clone(),
+                            None => return Err( EvaluateError::InvalidRegisterIndex )
+                        }
+                    },
+                    _ => return Err( EvaluateError::InvalidOperation ),
+                };
+
+                program.set_local(dest_reg, value)?;
+            }
+
+            OpCode::OpNewStruct => {
+                let start_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let count  = program.get_call_frame_mut()?.read_u8()? as usize;
+
+                let mut vec: Vec<Value> = Vec::with_capacity(count);
+                for reg_idx in start_reg..start_reg + count {
+                    let value = program.take_local(reg_idx as usize)?;
+                    vec.push(value);
+                }
+
+                let vm_struct = VMStruct { values: vec };
+                let struct_val = Value::Struct(Rc::from(RefCell::from(vm_struct)));
+                program.set_local(start_reg, struct_val)?;
+            }
+
+            _ => return Err(EvaluateError::UnknownInstruction)//println!("\x1b[3;30mEvaluating\x1b[0m \x1b[1;29mByte<{:#04x}>\x1b[0m", current_byte),
         }
     }
     Ok(())
