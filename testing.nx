@@ -1,8 +1,7 @@
 let new_array = [120, 500, 500, 129, 496, 1294, 1200, 12000, 91, 2111, 40, 120, 44, 649, 1209, 6000, 1200, 540, 12000, 4000, 150, 700, 120];
 let base_var = 0;
-for i in 0..23 {
-    let new_val = base_var + new_array[i];
-    base_var = new_val;
+for num in new_array {
+    base_var = base_var + num;
 }
 
 print("result:", base_var);

@@ -93,7 +93,7 @@ impl Display for OpCode {
             OpCode::OpMul => write!(f, "MUL"),
             OpCode::OpDiv => write!(f, "DIV"),
             OpCode::OpEq => write!(f, "EQ"),
-            OpCode::OpNotEq => write!(f, "NOT_EQ"),
+            OpCode::OpNotEq => write!(f, "NEQ"),
             OpCode::OpLessEqualThan => write!(f, "LEQT"),
             OpCode::OpGreaterEqualThan => write!(f, "GEQT"),
             OpCode::OpGreaterThan => write!(f, "GT"),
@@ -101,19 +101,22 @@ impl Display for OpCode {
             OpCode::OpFunctionCall => write!(f, "CALL"),
             OpCode::OpLoadConst => write!(f, "LOAD_CONST"),
             OpCode::OpLoadLocal => write!(f, "LOAD_LOCAL"),
-            OpCode::OpStoreLocal => write!(f, "STORE_LOCAL"),
+            OpCode::OpStoreLocal => write!(f, "STR"),
             OpCode::OpPush0 => write!(f, "PUSH_0"),
             OpCode::OpPush1 => write!(f, "PUSH_1"),
             OpCode::OpPushU8 => write!(f, "PUSH_U8"),
             OpCode::OpPushU16 => write!(f, "PUSH_U16"),
             OpCode::OpPushNum => write!(f, "PUSH_F64"),
             OpCode::OpReturn => write!(f, "RETURN"),
-            OpCode::OpNativeFnCall => write!(f, "NATIVE_CALL"),
+            OpCode::OpNativeFnCall => write!(f, "SYSCALL"),
             OpCode::OpJump => write!(f, "JUMP"),
-            OpCode::OpJumpIfFalse => write!(f, "JUMP_NEQ"),
-            OpCode::OpJumpIfTrue => write!(f, "JUMP_EQ"),
+            OpCode::OpJumpIfFalse => write!(f, "JNEQ"),
+            OpCode::OpJumpIfTrue => write!(f, "JEQ"),
             OpCode::OpLoadField => write!(f, "LOAD_FIELD"),
             OpCode::OpNewStruct => write!(f, "NEW_STRUCT"),
+            OpCode::OpDictSet => write!(f, "DICT_SET"),
+            OpCode::OpLoadIndex => write!(f, "LOAD_IDX"),
+            OpCode::OpPushArray => write!(f, "PUSH_ARR"),
 
             #[allow(unreachable_patterns)]
             _ => write!(f, "{:?}", self),
@@ -131,7 +134,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             };
 
             *index += 1;
-            println!("{} R{}", operator, reg1);
+            println!("\x1b[1;30m{}\x1b[0m R{}", operator, reg1);
         },
 
         OpCode::OpAdd | OpCode::OpSub | OpCode::OpDiv | OpCode::OpMul
@@ -157,7 +160,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             };
 
             *index += 1;
-            println!("{}, R{}, R{}, R{}", operator, reg1, reg2, reg3);
+            println!("\x1b[1;30m{}\x1b[0m R{}, R{}, R{}", operator, reg1, reg2, reg3);
         }
 
         OpCode::OpNewStruct => {
@@ -175,7 +178,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             *index += 1;
 
-            println!("{}, R{}, [{}]", operator, register, size);
+            println!("\x1b[1;30m{}\x1b[0m R{}, [\x1b[1;33m{}\x1b[0m]", operator, register, size);
         },
 
         OpCode::OpLoadField => {
@@ -200,7 +203,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             *index += 1;
 
-            println!("{}, R{}, R{}, [{}]", operator, reg_dest, field_reg, field_id);
+            println!("\x1b[1;30m{}\x1b[0m R{}, R{}, [\x1b[1;33m{}\x1b[0m]", operator, reg_dest, field_reg, field_id);
         },
 
         OpCode::OpLoadIndex => {
@@ -218,14 +221,14 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             *index += 1;
 
-            let field_id = match instruction_list.get(*index as usize.. *index as usize + 4) {
-                Some(val) => u32::from_le_bytes(val.try_into().unwrap()),
+            let field_id = match instruction_list.get(*index as usize) {
+                Some(val) => val,
                 None => return,
             };
 
             *index += 1;
 
-            println!("{}, R{}, R{}, [{}]", operator, reg_dest, field_reg, field_id);
+            println!("\x1b[1;30m{}\x1b[0m, R{}, R{}, R{}", operator, reg_dest, field_reg, field_id);
         },
 
         // 1 byte ahead
@@ -243,7 +246,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             };
 
             *index += 1;
-            println!("{} R{}, {}", operator, register, next_val);
+            println!("\x1b[1;30m{}\x1b[0m R{}, \x1b[1;33m{}\x1b[0m", operator, register, next_val);
         },
 
         OpCode::OpNativeFnCall => {
@@ -265,7 +268,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             };
             *index += 1;
 
-            println!("{} R{}, {}, {}", operator, reg, b1, b2);
+            println!("\x1b[1;30m{}\x1b[0m R{}, [\x1b[1;33m{}\x1b[0m], [\x1b[1;33m{}\x1b[0m]", operator, reg, b1, b2);
         }
 
         OpCode::OpJump => {
@@ -275,7 +278,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
                 None => return,
             }; 
             *index += 4;
-            println!("{} {}", operator, i32val);
+            println!("\x1b[1;30m{}\x1b[0m [\x1b[1;33m{}\x1b[0m]", operator, i32val);
         }
 
         OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue => {
@@ -292,11 +295,17 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             }; 
 
             *index += 4;
-            println!("{} R{}, {}", operator, reg, i32val);
+            println!("\x1b[1;30m{}\x1b[0m R{}, [\x1b[1;33m{}\x1b[0m]", operator, reg, i32val);
         }
 
         // 2 bytes ahead
         OpCode::OpPushU16 => {
+            let reg = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+            *index += 1;
+
             let byte1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
@@ -310,13 +319,8 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             *index += 1;
 
-            if operator == OpCode::OpNativeFnCall {
-                println!("{} {}, {}", operator, *byte1, *byte2);
-            } else {
-                let new_val = u16::from_le_bytes([*byte1, *byte2]);
-                println!("{} {}", operator, new_val);
-            }
-
+            let new_val = u16::from_le_bytes([*byte1, *byte2]);
+            println!("\x1b[1;30m{}\x1b[0mm R{}, {}", operator, reg, new_val);
         }, 
 
         OpCode::OpFunctionCall => {
@@ -332,11 +336,16 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             }; 
 
             *index += 4;
-            println!("{} R{}, F{}", operator, reg, u32val);
+            println!("\x1b[1;30m{}\x1b[0m R{}, F{}", operator, reg, u32val);
         }
 
         // 8 bytes ahead
         OpCode::OpPushNum => {
+            let reg = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+            *index += 1;
             let mut new_vec: Vec<u8> = Vec::new();
             for _ in 0..8 {
                 let byte1 = match instruction_list.get(*index as usize) {
@@ -354,7 +363,7 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
             };
 
             let new_val = f64::from_le_bytes(fixed_length_array);
-            println!("{}, {}", operator, new_val);
+            println!("\x1b[1;30m{}\x1b[0m R{}, {}", operator, reg, new_val);
         },
     }
 }
