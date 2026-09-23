@@ -35,6 +35,7 @@ pub enum OpCode {
     OpDictSet = 0x1D,
     OpNewStruct = 0x1E,
     OpLoadField = 0x1F,
+    OpLoadIndex = 0x20,
 }
 
 #[derive(Debug)]
@@ -76,7 +77,8 @@ impl TryFrom<u8> for OpCode {
             0x1D => Ok(OpCode::OpDictSet),
             0x1E => Ok(OpCode::OpNewStruct),
             0x1F => Ok(OpCode::OpLoadField),
-            // 0x20 => Ok(),
+            0x20 => Ok(OpCode::OpLoadIndex),
+            // 0x21 => Ok(),
             _ => Err(OpInvalid)
         }
     }
@@ -193,6 +195,31 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             let field_id = match instruction_list.get(*index as usize) {
                 Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            println!("{}, R{}, R{}, [{}]", operator, reg_dest, field_reg, field_id);
+        },
+
+        OpCode::OpLoadIndex => {
+            let reg_dest = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let field_reg = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let field_id = match instruction_list.get(*index as usize.. *index as usize + 4) {
+                Some(val) => u32::from_le_bytes(val.try_into().unwrap()),
                 None => return,
             };
 

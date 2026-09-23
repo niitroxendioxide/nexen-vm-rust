@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt::Display, io::{BufWriter, Stdout}, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, io::{BufWriter, Stdout}, rc::Rc};
 use super::evaluate::EvaluateError;
 
 type ReadRange = std::ops::Range<usize>;
@@ -52,24 +52,51 @@ impl FunctionBody {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ClassBody {
+    pub name: Value,
+    pub fields: Vec<Value>,
+    pub methods: Vec<Value>,
+}
+
+#[allow(dead_code)]
+impl ClassBody {
+    pub fn new(name: Value, fields: Vec<Value>, methods: Vec<Value>) -> Self {
+        ClassBody { name, fields, methods }
+    }
+
+    pub fn get_name_as_str(&self) -> Rc<str> {
+        match &self.name {
+            Value::String(str_ref) => str_ref.clone(),
+            _ => panic!("Unreachable"),
+        }
+    }
+}
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Constant {
-    _BoolConstant = 0x0,
-    _NumberConstant = 0x1,
+    BoolConstant(bool) = 0x0,
+    NumberConstant(f64) = 0x1,
     StringConstant(Rc<str>) = 0x02,
     FunctionConstant(FunctionBody) = 0x03,
+    ArrayConstant(Rc<RefCell<Vec<Constant>>>) = 0x04,
+    StringRefConstant(u8) = 0x07,
+    RegisterRefConstant(u8) = 0x08,
 }
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Value {
+    // Short(u16),
     Number(f64),
     String(Rc<str>),
     Bool(bool),
     Array(Rc<RefCell<Vec<Value>>>),
+    Dict(Rc<RefCell<HashMap<Value, Value>>>),
     Struct(Rc<RefCell<VMStruct>>),
+    Class(Rc<RefCell<ClassBody>>),
     Nil,
 }
 
@@ -85,21 +112,38 @@ impl Into<String> for Value {
     fn into(self) -> String {
         match self {
             Value::Array(_) => "<array>".to_string(),
+            Value::Dict(_) => "<dict>".to_string(),
+            Value::Struct(_) => "<struct>".to_string(),
+            Value::Class(_) => "<class>".to_string(),
             Value::Bool(val) => val.to_string(),
             Value::Nil => "nil".to_string(),
             Value::Number(f) => f.to_string(),
             Value::String(str) => String::from(str.clone().to_string()),
-            Value::Struct(_) => "<struct>".to_string(),
         }
     }
 }
 
-impl From<&Constant> for Value {
-    fn from(value: &Constant) -> Self {
-        match value {
-            Constant::StringConstant(str_val) => Value::String(str_val.clone()),
-            _=> Value::Number(0.0),
+fn value_from_constant(value: &Constant, program: &mut Program) -> Result<Value, EvaluateError> {
+    match value {
+        Constant::StringConstant(str_val) => Ok(Value::String(str_val.clone())),
+        Constant::BoolConstant(bool) => Ok(Value::Bool(*bool)),
+        Constant::NumberConstant(num) => Ok(Value::Number(*num)),
+        Constant::RegisterRefConstant(byte_ref) => {
+            Ok(program.get_local(*byte_ref as usize)?.clone())
+        },
+        Constant::StringRefConstant(byte_ref) => {
+            Ok(program.load_constant(*byte_ref as usize)?)
+        },
+        Constant::ArrayConstant(elements) => {
+            let mut array_vec: Vec<Value> = Vec::with_capacity(elements.borrow().len());
+            for static_element in elements.borrow().iter() {
+                let val = value_from_constant(static_element, program)?;
+                array_vec.push(val);
+            }
+
+            Ok(Value::Array(Rc::from(RefCell::from(array_vec))))
         }
+        _=> Ok(Value::Nil),
     }
 }
 
@@ -156,6 +200,8 @@ impl Display for Value {
             Value::Bool(raw_bool) => write!(formatter, "\x1b[0;33mRuntime<Bool, {}>\x1b[0m", raw_bool)?,
             Value::Array(refv) => write!(formatter, "\x1b[0;33mRuntime<Array[{}]>\x1b[0m", refv.borrow().len())?,
             Value::Struct(_) => write!(formatter, "\x1b[0;33mRuntime<Struct>\x1b[0m")?,
+            Value::Dict(refv) => write!(formatter, "\x1b[0;33mRuntime<Dict[{}]>\x1b[0m", refv.borrow().len())?,
+            Value::Class(_) => write!(formatter, "\x1b[0;33mRuntime<Class>\x1b[0m")?,
             Value::Nil => write!(formatter, "\x1b[0;33mRuntime<Nil>\x1b[0m")?,
         }
         Ok(())
@@ -258,11 +304,10 @@ impl Program {
         }
     }
 
-    pub fn load_constant(&self, index: usize) -> Result<Value, EvaluateError> {
-        match self.constants.get(index) {
-            Some(constant) => {
-                Ok(Value::from(constant))
-            },
+    pub fn load_constant(&mut self, index: usize) -> Result<Value, EvaluateError> {
+        let const_idx = self.constants.get(index).cloned();
+        match const_idx {
+            Some(constant) => value_from_constant(&constant, self),
             None => Err( EvaluateError::UndefinedConstant(index as u8) ),
         }
     }
@@ -327,6 +372,17 @@ impl Program {
             None => Err( EvaluateError::UndefinedLocalVariable )
         }
         //self.scope.borrow_mut().get((idx + self.base) as u8)
+    }
+
+    #[allow(unused)]
+    pub fn get_call_frame(&self) -> Result<&CallFrame, EvaluateError> {
+        self.call_stack.last().ok_or(EvaluateError::NoCallFrameAvailable)
+    }
+
+    #[allow(unused)]
+    pub fn get_local_ref(&self, idx: usize) -> Result<&Value, EvaluateError> {
+        let reg_base = self.get_call_frame()?.reg_base;
+        self.registers.get(reg_base + idx).ok_or(EvaluateError::UndefinedLocalVariable)
     }
 
     pub fn take_local(&mut self, idx: usize) -> Result<Value, EvaluateError> {

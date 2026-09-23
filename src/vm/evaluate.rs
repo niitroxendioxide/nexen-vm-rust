@@ -12,6 +12,7 @@ use super::opcodes::OpCode;
 pub enum EvaluateError {
     OutOfRange,
     InvalidOperation,
+    ArrayIndexNaN,
     UnknownInstruction,
     StackEndReached,
     InvalidRegisterIndex,
@@ -170,6 +171,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let register = program.get_call_frame_mut()?.read_u8()? as usize;
                 let arg = program.get_call_frame_mut()?.read_u8()? as usize;
                 let value = program.load_constant(arg)?;
+                
                 program.set_local(register, value)?;
             },
 
@@ -280,6 +282,33 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                             None => return Err( EvaluateError::InvalidRegisterIndex )
                         }
                     },
+                    Value::Array(arr_ref) => {
+                        match arr_ref.borrow().get(field_loaded) {
+                            Some(v) => v.clone(),
+                            None => Value::Nil
+                        }
+                    },
+                    _ => return Err( EvaluateError::InvalidOperation ),
+                };
+
+                program.set_local(dest_reg, value)?;
+            }
+
+            OpCode::OpLoadIndex => {
+                let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let struct_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let reg_val_loaded  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let idx = match program.get_local(reg_val_loaded)? {
+                    Value::Number(t) => *t,
+                    _=> return Err( EvaluateError::ArrayIndexNaN ),
+                } as usize;
+                let value = match program.get_local(struct_reg)? {
+                    Value::Array(arr_ref) => {
+                        match arr_ref.borrow().get(idx) {
+                            Some(v) => v.clone(),
+                            None => Value::Nil
+                        }
+                    },
                     _ => return Err( EvaluateError::InvalidOperation ),
                 };
 
@@ -300,6 +329,22 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let struct_val = Value::Struct(Rc::from(RefCell::from(vm_struct)));
                 program.set_local(start_reg, struct_val)?;
             }
+
+            OpCode::OpPushArray => {
+                let start_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let size  = program.get_call_frame_mut()?.read_u32()? as usize;
+                let mut vec: Vec<Value> = Vec::with_capacity(size);
+
+                for reg_idx in start_reg..start_reg + size {
+                    let value = program.take_local(reg_idx as usize)?;
+                    vec.push(value);
+                }
+
+                let vm_array = Value::Array(Rc::from(RefCell::from(vec)));
+                program.set_local(start_reg, vm_array)?;
+            }
+
+
 
             _ => return Err(EvaluateError::UnknownInstruction)//println!("\x1b[3;30mEvaluating\x1b[0m \x1b[1;29mByte<{:#04x}>\x1b[0m", current_byte),
         }

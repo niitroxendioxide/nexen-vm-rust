@@ -3,6 +3,7 @@ use crate::vm::evaluate::{EvaluateError};
 use std::io::{BufWriter, Error, Stdout, Write};
 use std::rc::Rc;
 
+static CLASS_FORMAT: &str = "Class<";
 pub fn to_io_error(er: Error) -> EvaluateError { EvaluateError::RustIOError(er.to_string()) }
 
 #[allow(unused)]
@@ -12,6 +13,15 @@ pub fn tostring(value: &Value) -> Value {
         Value::Number(val) => Value::String(val.to_string().into()),
         Value::String(t) => Value::String(t.clone()),
         Value::Nil => Value::String(Rc::from("nil")),
+        Value::Class(obj) => {
+            let class_name = obj.borrow().get_name_as_str();
+            let formatted = format!("{}{}{}", CLASS_FORMAT, class_name, ">");
+            Value::String(Rc::from(formatted))
+        },
+        Value::Dict(hmap) => {
+            let ptrfm = format!("{:p}", hmap.as_ptr());
+            Value::String(Rc::from(ptrfm))
+        }
         Value::Struct(vec) => {
             let ptrfm = format!("{:p}", vec.as_ptr());
             Value::String(Rc::from(ptrfm))
@@ -26,7 +36,10 @@ pub fn tostring(value: &Value) -> Value {
 fn print_value<W: Write>(output: &mut W, val: &Value) -> Result<(), EvaluateError> {
     match val {
         Value::Number(n) => write!(output, "{} ", n).map_err(to_io_error),
-        Value::String(s) => write!(output, "{} ", s).map_err(to_io_error),
+        Value::String(s) => { 
+            output.write_all(s.as_bytes()).map_err(|t| EvaluateError::RustIOError(t.to_string()))?; 
+            output.write_all(b" ").map_err(|t| EvaluateError::RustIOError(t.to_string())) 
+        }
         Value::Bool(b)   => write!(output, "{} ", b).map_err(to_io_error),
         Value::Nil       => output.write_all(b"nil ").map_err(to_io_error),
         
