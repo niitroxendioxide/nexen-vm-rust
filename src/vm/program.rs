@@ -1,5 +1,6 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Display, io::{BufWriter, Stdout}, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, io::{BufWriter, Stdout}, ops::Range, rc::Rc};
 use super::evaluate::EvaluateError;
+use super::modules::Module;
 
 type ReadRange = std::ops::Range<usize>;
 pub trait FromLeBytes<const N: usize>: Sized {
@@ -46,32 +47,12 @@ pub struct VMStruct {
     pub values: Vec<Value>,
 }
 
-impl FunctionBody {
-    pub fn new(length: u32, argument_count: u8, registers_used: u8, instructions: &[u8]) -> Self {
-        FunctionBody { length, argument_count, instructions: Rc::new(Vec::from(instructions)), registers_used }
-    }
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ClassBody {
     pub name: Value,
     pub fields: Vec<Value>,
     pub methods: Vec<Value>,
-}
-
-#[allow(dead_code)]
-impl ClassBody {
-    pub fn new(name: Value, fields: Vec<Value>, methods: Vec<Value>) -> Self {
-        ClassBody { name, fields, methods }
-    }
-
-    pub fn get_name_as_str(&self) -> Rc<str> {
-        match &self.name {
-            Value::String(str_ref) => str_ref.clone(),
-            _ => panic!("Unreachable"),
-        }
-    }
 }
 
 #[repr(u8)]
@@ -99,6 +80,51 @@ pub enum Value {
     Class(Rc<RefCell<ClassBody>>),
     Nil,
 }
+
+pub struct CallFrame {
+    pub program_counter: i64,
+    pub instructions: Rc<Vec<u8>>,
+    //pub scope: Rc<RefCell<Scope>>,
+    pub reg_base: usize,
+    pub reg_ret: usize,
+    pub function_id: i64,
+}
+
+pub struct Program {
+    pub version_major: u16,
+    pub version_minor: u16,
+    pub version_patch: u16,
+    pub constant_count: usize,
+    pub constants: Vec<Constant>,
+    pub functions: Vec<Constant>,
+    pub call_stack: Vec<CallFrame>,
+    pub core_module: Module,
+    // pub actual_pointer: i128,
+    pub std_out: BufWriter<Stdout>,
+    //pub current_scope: Rc<RefCell<Scope>>,
+    pub running_state: bool,
+}
+
+impl FunctionBody {
+    pub fn new(length: u32, argument_count: u8, registers_used: u8, instructions: &[u8]) -> Self {
+        FunctionBody { length, argument_count, instructions: Rc::new(Vec::from(instructions)), registers_used }
+    }
+}
+
+#[allow(dead_code)]
+impl ClassBody {
+    pub fn new(name: Value, fields: Vec<Value>, methods: Vec<Value>) -> Self {
+        ClassBody { name, fields, methods }
+    }
+
+    pub fn get_name_as_str(&self) -> Rc<str> {
+        match &self.name {
+            Value::String(str_ref) => str_ref.clone(),
+            _ => panic!("Unreachable"),
+        }
+    }
+}
+
 
 impl From<&[u8]> for Constant {
     fn from(value: &[u8]) -> Self {
@@ -154,31 +180,6 @@ fn value_from_constant(value: &Constant, program: &mut Program) -> Result<Value,
     pub parent: Option<Rc<RefCell<Scope>>>,
     pub current_stack: Stack,
 } */
-
-pub struct CallFrame {
-    pub program_counter: i64,
-    pub instructions: Rc<Vec<u8>>,
-    //pub scope: Rc<RefCell<Scope>>,
-    pub reg_base: usize,
-    pub reg_ret: usize,
-    pub function_id: i64,
-}
-
-pub struct Program {
-    pub version_major: u16,
-    pub version_minor: u16,
-    pub version_patch: u16,
-    pub constant_count: usize,
-    pub constants: Vec<Constant>,
-    pub functions: Vec<Constant>,
-    pub call_stack: Vec<CallFrame>,
-    pub stack: Vec<Value>,
-    pub registers: Vec<Value>,
-    // pub actual_pointer: i128,
-    pub std_out: BufWriter<Stdout>,
-    //pub current_scope: Rc<RefCell<Scope>>,
-    pub running_state: bool,
-}
 
 impl Display for Program {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -283,10 +284,9 @@ impl CallFrame {
 
 impl Program {
     pub fn new(version_major: u16, version_minor: u16, version_patch: u16, instructions: Rc<Vec<u8>>, functions: Vec<Constant>, constants: Vec<Constant>, _registers_used: u8) -> Self {
-        let first_call_frame = CallFrame::new(instructions, -1, 0, 0);
+        let first_call_frame = CallFrame::new(instructions.clone(), -1, 0, 0);
         let mut call_stack_vec = Vec::with_capacity(50);
-        let mut registers = Vec::with_capacity(256);
-        registers.resize(256, Value::Nil);
+        let core_module = Module::new(vec![], instructions.clone(), vec![]);
         call_stack_vec.push(first_call_frame);
         
         Program { 
@@ -298,9 +298,8 @@ impl Program {
             functions,
             call_stack: call_stack_vec,
             running_state: false,
-            registers: registers,
-            stack: Vec::with_capacity(64),
-            std_out: BufWriter::new(std::io::stdout())
+            core_module,
+            std_out: BufWriter::new(std::io::stdout()),
         }
     }
 
@@ -340,57 +339,38 @@ impl Program {
         self.running_state = state;
     }
 
-    pub fn _push(&mut self, value: Value) -> Result<(), EvaluateError> {
-        self.stack.push(value);
-        //self.scope.borrow_mut().push(value);
-        Ok(())
-    }
-
-    pub fn pop(&mut self) -> Result<Value, EvaluateError> {
-        match self.stack.pop() {
-            Some(val) => Ok(val),
-            None => Err( EvaluateError::StackEndReached ),
-        }
-        //self.scope.borrow_mut().pop()
-    }
-
     pub fn set_local(&mut self, idx: usize, value: Value) -> Result<(), EvaluateError> {
         let reg_base = self.get_call_frame_mut()?.reg_base;
-        if (reg_base + idx) >= self.registers.len() {
-            self.registers.reserve(128);
-        }
-
-        self.registers[reg_base + idx] = value;
+        self.core_module.set_local(reg_base + idx, value)?;
         Ok(())
-        //self.scope.borrow_mut().set((idx + self.base) as u8, value);
     }
 
     pub fn get_local(&mut self, idx: usize) -> Result<&Value, EvaluateError> {
         let reg_base = self.get_call_frame_mut()?.reg_base;
-        match self.registers.get(reg_base + idx) {
-            Some(val) => Ok(val),
-            None => Err( EvaluateError::UndefinedLocalVariable )
-        }
-        //self.scope.borrow_mut().get((idx + self.base) as u8)
+        self.core_module.get_local(reg_base + idx)
     }
 
-    #[allow(unused)]
+    /*#[allow(unused)]
     pub fn get_call_frame(&self) -> Result<&CallFrame, EvaluateError> {
         self.call_stack.last().ok_or(EvaluateError::NoCallFrameAvailable)
     }
-
+    
     #[allow(unused)]
     pub fn get_local_ref(&self, idx: usize) -> Result<&Value, EvaluateError> {
         let reg_base = self.get_call_frame()?.reg_base;
-        self.registers.get(reg_base + idx).ok_or(EvaluateError::UndefinedLocalVariable)
-    }
+        self.core_module.get_local_ref(reg_base + idx)
+    } */
+
+   pub fn get_mut_slice(&mut self, idx: Range<usize>) -> Result<&mut [Value], EvaluateError> {
+        let reg_base = self.get_call_frame_mut()?.reg_base;
+        let new_range = idx.start + reg_base..idx.end + reg_base;
+
+        self.core_module.get_mut_slice(new_range)
+   }
 
     pub fn take_local(&mut self, idx: usize) -> Result<Value, EvaluateError> {
         let reg_base = self.get_call_frame_mut()?.reg_base;
-        match self.registers.get_mut(reg_base + idx) {
-            Some(val) => Ok(std::mem::replace(val, Value::Nil)),
-            None => Err( EvaluateError::UndefinedLocalVariable )
-        }
+        self.core_module.take_local(reg_base + idx)
         //self.scope.borrow_mut().get((idx + self.base) as u8)
     }
 }

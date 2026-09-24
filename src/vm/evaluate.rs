@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::fmt::Display;
+use std::io::{BufWriter, Write};
 use std::rc::Rc;
 
 use crate::vm::program::{CallFrame, Constant, VMStruct, Value};
@@ -14,6 +15,7 @@ pub enum EvaluateError {
     InvalidOperation,
     ArrayIndexNaN,
     UnknownInstruction,
+    #[allow(unused)]
     StackEndReached,
     InvalidRegisterIndex,
     UndefinedConstant(u8),
@@ -26,6 +28,7 @@ pub enum EvaluateError {
     RustIOError(String),
 
     // NoValueProvided,
+    #[allow(unused)]
     RustStackOverflow,
 
 }
@@ -198,9 +201,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
             },
 
             OpCode::OpStoreLocal => {
-                let value = program.pop()?;
-                let register = program.get_call_frame_mut()?.read_u8()? as usize;                
-                program.set_local(register, value)?;
+                panic!("Why are you storing local? unused code unsupported.")
             }
 
             OpCode::OpLoadLocal => {
@@ -225,22 +226,28 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let native_fn_idx = program.get_call_frame_mut()?.read_u8()? as usize;
                 let arg_count  = program.get_call_frame_mut()?.read_u8()? as usize;
 
-                let caller_reg_base = program.get_call_frame_mut()?.reg_base;
+                //let caller_reg_base = program.get_call_frame_mut()?.reg_base;
 
-                let absolute_arg_start = caller_reg_base + start_reg;
+                let absolute_arg_start = start_reg;
                 let absolute_arg_end = absolute_arg_start + arg_count;
 
-                let args = match program.registers.get_mut(absolute_arg_start..absolute_arg_end) {
+                let args = program.get_mut_slice(absolute_arg_start .. absolute_arg_end)?; /*match program.registers.get_mut(absolute_arg_start..absolute_arg_end) {
                     Some(slice) => slice,
                     None => return Err(EvaluateError::InvalidRegisterIndex),
-                };
+                }; */
 
-                let output = &mut program.std_out;
+                let mut temp_output = BufWriter::new(std::io::stdout());
+                
                 let result = match native_fn_idx {
                     0x00 => {
-                        stdlib::out::print(output, args, arg_count as u8)?
+                        stdlib::out::print(&mut temp_output, args, arg_count as u8)?
                     },
                     _ => return Err( EvaluateError::UndefinedFunction ),
+                };
+
+                let cloned = &mut program.std_out;
+                if let Err(e) = cloned.write_all(temp_output.buffer()) {
+                    return Err( EvaluateError::RustIOError(format!("Buffer write failed, reason: {}", e)) )
                 };
 
                 //let current_frame_mut = program.get_call_frame_mut()?;
@@ -250,7 +257,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
             OpCode::OpFunctionCall => {
                 let start_reg = program.get_call_frame_mut()?.read_u8()? as usize;
                 let fn_idx = program.get_call_frame_mut()?.read_u32()? as usize;
-                let (_arg_count, instructions, fn_reg_count) = match program.load_function(fn_idx)? {
+                let (_arg_count, instructions, _fn_reg_count) = match program.load_function(fn_idx)? {
                     Constant::FunctionConstant(body) => ( 
                         body.argument_count as usize,
                         body.instructions.clone(),
@@ -262,9 +269,9 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let caller_reg_base = program.get_call_frame_mut()?.reg_base;
                 let new_reg_base = caller_reg_base + start_reg;
 
-                if new_reg_base + fn_reg_count > program.registers.len() {
+                /*if new_reg_base + fn_reg_count > program.registers.len() {
                     return Err(EvaluateError::RustStackOverflow);
-                }
+                } */
 
                 let new_call_frame = CallFrame::new(instructions, fn_idx as i64, new_reg_base, start_reg);
                 

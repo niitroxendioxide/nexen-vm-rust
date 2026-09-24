@@ -3,3 +3,4 @@ pub mod parser;
 pub mod program;
 pub mod evaluate;
 pub mod stdlib;
+pub mod modules;

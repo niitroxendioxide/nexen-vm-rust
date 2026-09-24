@@ -72,8 +72,8 @@ fn main() {
             Ok(program_instance) => program_instance,
             Err(err) => {
                 match err {
-                    FileParsingError::FileError(new_err) => println!("File parsing error: {:?}", new_err),
-                    t => println!("Program error: {:?}", t),
+                    FileParsingError::FileError(new_err) => println!("\n\x1b[1;31m[File Error]\x1b[0m: Error when parsing .nxo file, trace:\n> {:?}", new_err),
+                    t => println!("\n\x1b[1;31m[File Error]\x1b[0m: Error when parsing .nxo file, trace:\n> {}", t),
                 }
 
                 return;
@@ -144,7 +144,7 @@ fn main() {
                 println!("|-> Program pointer at: {}", begin_progc);
                 println!("> \x1b[3;30mRegisters:\x1b[0m");
 
-                for (idx, value) in program.registers.iter().enumerate() {
+                for (idx, value) in program.core_module.registers.iter().enumerate() {
                     if let crate::vm::program::Value::Nil = value {
                         continue;
                     }
