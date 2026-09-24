@@ -70,7 +70,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
     let _program_size = read_u32_le(&read_bytes, 10..14)?;
     let constant_count = read_u32_le(&read_bytes, 14..18)?;
     let function_count = read_u32_le(&read_bytes, 18..22)?;
-    let registers_used = match read_bytes.get(22) {
+    let _ = match read_bytes.get(22) {
         Some(v) => *v,
         None => return Err(FileParsingError::NotEnoughData),
     };
@@ -86,7 +86,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
     let mut functions: Vec<Constant> = Vec::new();
 
     #[allow(unused)]
-    let mut modules: Vec<Module> = Vec::new();
+    let mut modules: Vec<Rc<Module>> = Vec::new();
     let mut program_instructions = Vec::new();
 
     fn parse_constant(cur_byte: &u8, read_bytes: &Vec<u8>, idx: &mut usize, constants: &mut Vec<Constant>) -> Result<(), FileParsingError> {
@@ -268,7 +268,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
             };
             
             idx += module_size;
-            modules.push(Module::new(reg_vec, Rc::from(module_body), module_functions));
+            modules.push(Rc::from(Module::new(reg_vec, Rc::from(module_body), module_functions)));
 
             module_index+=1;
             continue;
@@ -303,7 +303,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
         Rc::new(program_instructions), 
         functions, 
         constants, 
-        registers_used
+        modules
     );
 
     Ok(new_program)

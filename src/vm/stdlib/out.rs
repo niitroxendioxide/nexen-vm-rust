@@ -14,21 +14,22 @@ pub fn tostring(value: &Value) -> Value {
         Value::Number(val) => Value::String(val.to_string().into()),
         Value::String(t) => Value::String(t.clone()),
         Value::Nil => Value::String(Rc::from("nil")),
+        Value::Module(md) => Value::String(Rc::from(format!("<module {:p}>", md))),
         Value::Class(obj) => {
             let class_name = obj.borrow().get_name_as_str();
             let formatted = format!("{}{}{}", CLASS_FORMAT, class_name, ">");
             Value::String(Rc::from(formatted))
         },
         Value::Dict(hmap) => {
-            let ptrfm = format!("{:p}", hmap.as_ptr());
+            let ptrfm = format!("<dict {:p}>", hmap.as_ptr());
             Value::String(Rc::from(ptrfm))
         }
         Value::Struct(vec) => {
-            let ptrfm = format!("{:p}", vec.as_ptr());
+            let ptrfm = format!("<struct {:p}>", vec.as_ptr());
             Value::String(Rc::from(ptrfm))
         },
         Value::Array(vec) => {
-            let ptrfm = format!("{:p}", vec.as_ptr());
+            let ptrfm = format!("<array {:p}>", vec.as_ptr());
             Value::String(Rc::from(ptrfm))
         }, 
     }

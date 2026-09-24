@@ -78,6 +78,7 @@ pub enum Value {
     Dict(Rc<RefCell<HashMap<Value, Value>>>),
     Struct(Rc<RefCell<VMStruct>>),
     Class(Rc<RefCell<ClassBody>>),
+    Module(Rc<Module>),
     Nil,
 }
 
@@ -99,6 +100,7 @@ pub struct Program {
     pub functions: Vec<Constant>,
     pub call_stack: Vec<CallFrame>,
     pub core_module: Module,
+    pub modules: Vec<Rc<Module>>,
     // pub actual_pointer: i128,
     pub std_out: BufWriter<Stdout>,
     //pub current_scope: Rc<RefCell<Scope>>,
@@ -144,6 +146,7 @@ impl Into<String> for Value {
             Value::Bool(val) => val.to_string(),
             Value::Nil => "nil".to_string(),
             Value::Number(f) => f.to_string(),
+            Value::Module(md) => format!("<module {:p}>", md),
             Value::String(str) => String::from(str.clone().to_string()),
         }
     }
@@ -203,6 +206,7 @@ impl Display for Value {
             Value::Struct(_) => write!(formatter, "\x1b[0;33mRuntime<Struct>\x1b[0m")?,
             Value::Dict(refv) => write!(formatter, "\x1b[0;33mRuntime<Dict[{}]>\x1b[0m", refv.borrow().len())?,
             Value::Class(_) => write!(formatter, "\x1b[0;33mRuntime<Class>\x1b[0m")?,
+            Value::Module(_) => write!(formatter, "\x1b[0;33mRuntime<Module>\x1b[0m")?,
             Value::Nil => write!(formatter, "\x1b[0;33mRuntime<Nil>\x1b[0m")?,
         }
         Ok(())
@@ -283,7 +287,15 @@ impl CallFrame {
 }
 
 impl Program {
-    pub fn new(version_major: u16, version_minor: u16, version_patch: u16, instructions: Rc<Vec<u8>>, functions: Vec<Constant>, constants: Vec<Constant>, _registers_used: u8) -> Self {
+    pub fn new(
+        version_major: u16, 
+        version_minor: u16, 
+        version_patch: u16, 
+        instructions: Rc<Vec<u8>>, 
+        functions: Vec<Constant>, 
+        constants: Vec<Constant>, 
+        modules: Vec<Rc<Module>>,
+    ) -> Self {
         let first_call_frame = CallFrame::new(instructions.clone(), -1, 0, 0);
         let mut call_stack_vec = Vec::with_capacity(50);
         let core_module = Module::new(vec![], instructions.clone(), vec![]);
@@ -300,6 +312,7 @@ impl Program {
             running_state: false,
             core_module,
             std_out: BufWriter::new(std::io::stdout()),
+            modules,
         }
     }
 
@@ -372,5 +385,16 @@ impl Program {
         let reg_base = self.get_call_frame_mut()?.reg_base;
         self.core_module.take_local(reg_base + idx)
         //self.scope.borrow_mut().get((idx + self.base) as u8)
+    }
+
+    pub fn load_mod(&mut self, var_idx: usize, module_idx: usize) -> Result<(), EvaluateError> {
+        match self.modules.get(module_idx) {
+            Some(module_obj) => {
+                self.set_local(var_idx, Value::Module(module_obj.clone()))?;
+
+                Ok(())
+            },
+            None => return Err( EvaluateError::UndefinedModule(module_idx) )
+        }
     }
 }

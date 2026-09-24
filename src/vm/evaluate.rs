@@ -20,6 +20,7 @@ pub enum EvaluateError {
     InvalidRegisterIndex,
     UndefinedConstant(u8),
     UndefinedLocalVariable,
+    UndefinedModule(usize),
     UndefinedFunction,
     NoCallFrameAvailable,
     NotAFunction,
@@ -40,6 +41,7 @@ impl Display for EvaluateError {
             EvaluateError::UndefinedConstant(val) => write!(f, "UndefinedConstant: {val}"),
             EvaluateError::CrossValueOperation(op, reg1, reg2) => write!(f, "Cross Value Operation: {}, R{}, R{}",
             op, reg1, reg2),
+            EvaluateError::UndefinedModule(val) => write!(f, "Module [{val}] is undefined."),
             generic => write!(f, "{:?}", generic),
         }
     }
@@ -295,11 +297,26 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                             None => Value::Nil
                         }
                     },
-                    _ => return Err( EvaluateError::InvalidOperation ),
+                    /* */
+                    _ => {
+                        program.get_call_frame_mut()?.program_counter -= 4;
+                        return Err( EvaluateError::InvalidOperation )
+                    },
                 };
 
                 program.set_local(dest_reg, value)?;
             }
+
+            OpCode::OpLoadMod => {
+                let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let module_idx  = program.get_call_frame_mut()?.read_u32()? as usize;
+
+                println!("\n\x1b[1;31m[TODO WARNING]\x1b[0m\nOP_LOAD_MOD SHOULD ALSO LOAD THE MODULE AND EXECUTE IT IF IT HASN'T BEEN.\n\x1b[1;31m[TODO WARNING]\x1b[0m\n");
+                program.load_mod(dest_reg, module_idx)?;
+            }
+
+            OpCode::OpLoadGlob => {
+            },
 
             OpCode::OpLoadIndex => {
                 let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;

@@ -8,6 +8,7 @@ use crate::vm::program::{Constant, Value};
 
 
 #[allow(unused)]
+#[derive(Clone, Debug)]
 pub struct Module {
     pub registers: Vec<Value>,
     pub exports: Vec<u8>,
