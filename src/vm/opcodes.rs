@@ -136,7 +136,7 @@ impl Display for OpCode {
 pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut i128) {
     match operator {
         OpCode::OpVoid => println!("{}", operator),
-        OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpCallReg | OpCode::OpReturn | OpCode::OpPushArray| OpCode::OpDictSet | OpCode::OpPushDict => {
+        OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpReturn | OpCode::OpPushArray| OpCode::OpDictSet | OpCode::OpPushDict => {
             let reg1 = match instruction_list.get(*index as usize) {
                 Some(val) => val,
                 None => return,
@@ -214,6 +214,23 @@ pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &
 
             println!("\x1b[1;30m{}\x1b[0m R{}, R{}, [\x1b[1;33m{}\x1b[0m]", operator, reg_dest, field_reg, field_id);
         },
+
+        OpCode::OpCallReg => {
+            let ret_reg = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+
+            let called_reg = match instruction_list.get(*index as usize) {
+                Some(val) => val,
+                None => return,
+            };
+
+            *index += 1;
+            println!("\x1b[1;30m{}\x1b[0m R{}, R{}", operator, ret_reg, called_reg);
+        }
 
         OpCode::OpLoadIndex => {
             let reg_dest = match instruction_list.get(*index as usize) {

@@ -16,6 +16,7 @@ pub enum EvaluateError {
     InvalidOperation,
     CircularDependency,
     ArrayIndexNaN,
+    InstructionNotImplemented,
     UnknownInstruction,
     #[allow(unused)]
     StackEndReached,
@@ -85,6 +86,11 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 return Err(EvaluateError::InvalidOperation);
             },
         };
+
+        fn leave_on_unsupported(program: &mut Program) -> Result<(), EvaluateError> {
+            program.get_call_frame_mut()?.program_counter -= 1;
+            return Err(EvaluateError::InstructionNotImplemented)
+        }
 
         match oper {
             OpCode::OpAdd | OpCode::OpDiv | OpCode::OpEq | OpCode::OpMul | OpCode::OpSub | OpCode::OpGreaterEqualThan | OpCode::OpGreaterThan | OpCode::OpLessThan | OpCode::OpLessEqualThan => {
@@ -213,9 +219,7 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 }
             },
 
-            OpCode::OpStoreLocal => {
-                panic!("Why are you storing local? unused code unsupported.")
-            }
+            OpCode::OpStoreLocal => leave_on_unsupported(program)?,
 
             OpCode::OpLoadLocal => {
                 let reg = program.get_call_frame_mut()?.read_u8()? as usize;
@@ -318,7 +322,7 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                         let mapped_reg = *module_ref.borrow_mut().exports.get(field_loaded).ok_or( EvaluateError::OutOfRange )? as usize;
                         let local_cloned = module_ref.borrow_mut().get_local(mapped_reg)?.clone();
 
-                        // println!("returning: {}", local_cloned);
+                        println!("returning: {}", local_cloned);
                         local_cloned
                     }
                     /* */
@@ -340,8 +344,9 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 //println!("module?: {}", program.get_local(dest_reg)?);
             }
 
-            OpCode::OpLoadGlob => {
-            },
+            OpCode::OpLoadGlob => leave_on_unsupported(program)?,
+            OpCode::OpCallReg => leave_on_unsupported(program)?,
+            OpCode::OpVoid => leave_on_unsupported(program)?,
 
             OpCode::OpLoadIndex => {
                 let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
@@ -393,9 +398,10 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 program.set_local(start_reg, vm_array)?;
             }
 
-
-
-            _ => return Err(EvaluateError::UnknownInstruction)//println!("\x1b[3;30mEvaluating\x1b[0m \x1b[1;29mByte<{:#04x}>\x1b[0m", current_byte),
+            _ => {
+                program.get_call_frame_mut()?.program_counter -= 1;
+                return Err(EvaluateError::UnknownInstruction)
+            }//println!("\x1b[3;30mEvaluating\x1b[0m \x1b[1;29mByte<{:#04x}>\x1b[0m", current_byte),
         }
     }
 

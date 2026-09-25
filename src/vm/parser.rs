@@ -234,7 +234,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
                 .map_err(|_| FileParsingError::InvalidDeclaredModule("Module has no function count".to_string()) )? as usize;
 
             idx += 4;
-            println!("Module: {module_index} has {export_count} exports, {func_count} functions & {module_size} bytes of __start");
+            // println!("Module: {module_index} has {export_count} exports, {func_count} functions & {module_size} bytes of __start");
 
             let mut reg_vec: Vec<u8> = Vec::with_capacity(export_count);
             for exp_idx in 0..export_count {
