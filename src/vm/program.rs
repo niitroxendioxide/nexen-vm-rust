@@ -1,4 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, fmt::Display, io::{BufWriter, Stdout}, ops::Range, rc::Rc};
+use crate::vm::modules::{ModuleState, ProgramModule};
+
 use super::evaluate::EvaluateError;
 use super::modules::Module;
 
@@ -67,6 +69,15 @@ pub enum Constant {
     RegisterRefConstant(u8) = 0x08,
 }
 
+/* Quick type definitions */
+pub type Instructions = Rc<Vec<u8>>;
+pub type CanError = Result<(), EvaluateError>;
+pub type ProgramAccessed<T> = Result<T, EvaluateError>;
+pub type ClassBodyRef = Rc<RefCell<ClassBody>>;
+pub type StructRef = Rc<RefCell<VMStruct>>;
+pub type DictRef = Rc<RefCell<HashMap<Value, Value>>>;
+pub type ArrayRef = Rc<RefCell<Vec<Value>>>;
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -74,21 +85,21 @@ pub enum Value {
     Number(f64),
     String(Rc<str>),
     Bool(bool),
-    Array(Rc<RefCell<Vec<Value>>>),
-    Dict(Rc<RefCell<HashMap<Value, Value>>>),
-    Struct(Rc<RefCell<VMStruct>>),
-    Class(Rc<RefCell<ClassBody>>),
-    Module(Rc<Module>),
+    Array(ArrayRef),
+    Dict(DictRef),
+    Struct(StructRef),
+    Class(ClassBodyRef),
+    Module(ProgramModule),
     Nil,
 }
 
 pub struct CallFrame {
-    pub program_counter: i64,
+    pub program_counter: i128,
     pub instructions: Rc<Vec<u8>>,
     //pub scope: Rc<RefCell<Scope>>,
     pub reg_base: usize,
     pub reg_ret: usize,
-    pub function_id: i64,
+    //pub function_id: i64,
 }
 
 pub struct Program {
@@ -99,13 +110,14 @@ pub struct Program {
     pub constants: Vec<Constant>,
     pub functions: Vec<Constant>,
     pub call_stack: Vec<CallFrame>,
-    pub core_module: Module,
-    pub modules: Vec<Rc<Module>>,
+    pub module_idx: Vec<usize>,
+    pub modules: Vec<ProgramModule>,
     // pub actual_pointer: i128,
     pub std_out: BufWriter<Stdout>,
     //pub current_scope: Rc<RefCell<Scope>>,
     pub running_state: bool,
 }
+
 
 impl FunctionBody {
     pub fn new(length: u32, argument_count: u8, registers_used: u8, instructions: &[u8]) -> Self {
@@ -226,8 +238,13 @@ impl Display for Constant {
 }
 
 impl CallFrame {
-    pub fn new(instructions: Rc<Vec<u8>>, function_id: i64, reg_base: usize, reg_ret: usize) -> Self {
-        CallFrame { program_counter: 0, instructions, function_id, reg_base, reg_ret }
+    pub fn new(
+        instructions: Rc<Vec<u8>>, 
+        program_counter: i128, 
+        reg_base: usize, 
+        reg_ret: usize
+    ) -> Self {
+        CallFrame { program_counter, instructions, reg_base, reg_ret }
     }
 
     pub fn read_u32(&mut self) -> Result<u32, EvaluateError> {
@@ -291,17 +308,17 @@ impl Program {
         version_major: u16, 
         version_minor: u16, 
         version_patch: u16, 
-        instructions: Rc<Vec<u8>>, 
+        instructions: Instructions, 
         functions: Vec<Constant>, 
         constants: Vec<Constant>, 
-        modules: Vec<Rc<Module>>,
+        modules: Vec<ProgramModule>,
     ) -> Self {
         let first_call_frame = CallFrame::new(instructions.clone(), -1, 0, 0);
         let mut call_stack_vec = Vec::with_capacity(50);
-        let core_module = Module::new(vec![], instructions.clone(), vec![]);
+        let fn_clone = functions.clone();
         call_stack_vec.push(first_call_frame);
         
-        Program { 
+        let mut cur_program = Program { 
             version_major, 
             version_minor, 
             version_patch,
@@ -310,13 +327,17 @@ impl Program {
             functions,
             call_stack: call_stack_vec,
             running_state: false,
-            core_module,
+            module_idx: vec![modules.len()],
             std_out: BufWriter::new(std::io::stdout()),
             modules,
-        }
+        };
+
+        let core_module = Module::new_ref(vec![], instructions.clone(), fn_clone);
+        cur_program.modules.push(core_module);
+        cur_program
     }
 
-    pub fn load_constant(&mut self, index: usize) -> Result<Value, EvaluateError> {
+    pub fn load_constant(&mut self, index: usize) -> ProgramAccessed<Value>/*Result<Value, EvaluateError>*/ {
         let const_idx = self.constants.get(index).cloned();
         match const_idx {
             Some(constant) => value_from_constant(&constant, self),
@@ -324,7 +345,7 @@ impl Program {
         }
     }
 
-    pub fn load_function(&self, index: usize) -> Result<&Constant, EvaluateError> {
+    pub fn load_function(&self, index: usize) -> ProgramAccessed<&Constant> {
         match self.functions.get(index) {
             Some(constant) => {
                 Ok(constant)
@@ -333,7 +354,7 @@ impl Program {
         }
     }
 
-    pub fn get_call_frame_mut(&mut self) -> Result<&mut CallFrame, EvaluateError> {
+    pub fn get_call_frame_mut(&mut self) -> ProgramAccessed<&mut CallFrame> {
         match self.call_stack.last_mut() {
             Some(cframe) => Ok(cframe),
             None => Err(EvaluateError::NoCallFrameAvailable),
@@ -352,15 +373,28 @@ impl Program {
         self.running_state = state;
     }
 
-    pub fn set_local(&mut self, idx: usize, value: Value) -> Result<(), EvaluateError> {
+    pub fn get_cur_mod_idx(&mut self) -> usize {
+        *self.module_idx.last().expect("Module should never be empty.")
+    }
+
+    pub fn get_current_module(&mut self) -> ProgramAccessed<ProgramModule> {
+        let index = self.get_cur_mod_idx();
+        match self.modules.get(index) {
+            Some(v) => Ok(v.clone()),
+            None => Err(EvaluateError::NoModuleActive)
+        }
+    }
+
+    pub fn set_local(&mut self, idx: usize, value: Value) -> CanError {
         let reg_base = self.get_call_frame_mut()?.reg_base;
-        self.core_module.set_local(reg_base + idx, value)?;
+        self.get_current_module()?.borrow_mut().set_local(reg_base + idx, value)?;
+        //self.core_module.set_local(reg_base + idx, value)?;
         Ok(())
     }
 
-    pub fn get_local(&mut self, idx: usize) -> Result<&Value, EvaluateError> {
+    pub fn get_local(&mut self, idx: usize) -> ProgramAccessed<Value> {
         let reg_base = self.get_call_frame_mut()?.reg_base;
-        self.core_module.get_local(reg_base + idx)
+        self.get_current_module()?.borrow_mut().get_local(reg_base + idx).cloned()
     }
 
     /*#[allow(unused)]
@@ -374,20 +408,83 @@ impl Program {
         self.core_module.get_local_ref(reg_base + idx)
     } */
 
-   pub fn get_mut_slice(&mut self, idx: Range<usize>) -> Result<&mut [Value], EvaluateError> {
+    pub fn with_mut_slice<F, T>(&mut self, idx: Range<usize>, f: F) -> ProgramAccessed<T>
+    where
+        F: FnOnce(&mut Program, &mut [Value]) -> T,
+    {
         let reg_base = self.get_call_frame_mut()?.reg_base;
         let new_range = idx.start + reg_base..idx.end + reg_base;
 
-        self.core_module.get_mut_slice(new_range)
-   }
+        let modctx = self.get_current_module()?;
+        
+        let mut borrowed = modctx.borrow_mut();
+
+        let slice = borrowed.get_mut_slice(new_range)
+            .map_err(|_| EvaluateError::InvalidRegisterIndex)?;
+
+        Ok(f(self, slice))
+    }
+
+    /*pub fn get_mut_slice(&mut self, idx: Range<usize>) -> Result<&mut [Value], EvaluateError> {
+            let reg_base = self.get_call_frame_mut()?.reg_base;
+            let new_range = idx.start + reg_base..idx.end + reg_base;
+
+            self.core_module.get_mut_slice(new_range)
+    }*/
 
     pub fn take_local(&mut self, idx: usize) -> Result<Value, EvaluateError> {
         let reg_base = self.get_call_frame_mut()?.reg_base;
-        self.core_module.take_local(reg_base + idx)
+        self.get_current_module()?.borrow_mut().take_local(reg_base + idx)
         //self.scope.borrow_mut().get((idx + self.base) as u8)
     }
 
-    pub fn load_mod(&mut self, var_idx: usize, module_idx: usize) -> Result<(), EvaluateError> {
+    pub fn leave_module_compilation(&mut self) -> CanError {
+        if self.call_stack.len() < 2 {
+            return Err( EvaluateError::StackEndReached );
+        }
+
+        self.get_current_module()?.borrow_mut().set_state(ModuleState::Finished);
+        self.module_idx.pop();
+        self.call_stack.pop();
+        Ok(())
+    }
+
+    pub fn load_mod(&mut self, var_idx: usize, module_idx: usize) -> CanError {
+        let (module_instructions, module_obj) = match self.modules.get(module_idx) {
+            Some(module_obj) => {
+                let state = module_obj.borrow().state;
+
+                if state == ModuleState::Unvisited {
+                    module_obj.borrow_mut().set_state(ModuleState::Compiling);
+                    let instructions = module_obj.borrow_mut().body.clone();
+                    (Some(instructions), module_obj.clone())
+                } else if state == ModuleState::Compiling {
+                    return Err(EvaluateError::CircularDependency);
+                } else {
+                    (None, module_obj.clone())
+                }
+            }
+            None => return Err(EvaluateError::UndefinedModule(module_idx)),
+        };
+
+        if let Some(instructions) = module_instructions {
+            self.module_idx.push(module_idx);
+            self.push_call_frame(instructions, 0, 0, 0)?;
+        }
+
+        self.set_local(var_idx, Value::Module(module_obj))?;
+
+        Ok(())
+    }
+
+    pub fn push_call_frame(&mut self, instructions: Instructions, pc: i128, reg_base: usize, reg_ret: usize) -> Result<(), EvaluateError> {
+        let new_frame = CallFrame::new(instructions, pc, reg_base, reg_ret);
+        self.call_stack.push(new_frame);
+
+        Ok(())
+    }
+
+    /*pub fn load_mod(&mut self, var_idx: usize, module_idx: usize) -> Result<(), EvaluateError> {
         match self.modules.get(module_idx) {
             Some(module_obj) => {
                 self.set_local(var_idx, Value::Module(module_obj.clone()))?;
@@ -396,5 +493,5 @@ impl Program {
             },
             None => return Err( EvaluateError::UndefinedModule(module_idx) )
         }
-    }
+    }*/
 }

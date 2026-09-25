@@ -1,10 +1,17 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use std::ops::Range;
 
 use crate::vm::evaluate::{EvaluateError};
-use crate::vm::program::{Constant, Value};
+use crate::vm::program::{Constant, Instructions, Value};
 
+#[derive(Clone, Debug, PartialEq, Copy)]
+pub enum ModuleState {
+    Compiling,
+    Finished,
+    Unvisited,
+}
 
 
 #[allow(unused)]
@@ -13,15 +20,22 @@ pub struct Module {
     pub registers: Vec<Value>,
     pub exports: Vec<u8>,
     pub functions: Vec<Constant>,
-    pub body: Rc<Vec<u8>>,
+    pub body: Instructions,
+    pub state: ModuleState,
 }
 
+pub type ProgramModule = Rc<RefCell<Module>>;
+
 impl Module {
-    pub fn new(exports: Vec<u8>, body: Rc<Vec<u8>>, functions: Vec<Constant>) -> Self {
+    pub fn new_ref(exports: Vec<u8>, body: Rc<Vec<u8>>, functions: Vec<Constant>) -> ProgramModule {
         let mut registers = Vec::with_capacity(256);
         registers.resize(256, Value::Nil);
 
-        Module { registers, exports, body, functions }
+        Rc::from(RefCell::from(Module { registers, exports, body, functions, state: ModuleState::Unvisited }))
+    }
+
+    pub fn set_state(&mut self, state: ModuleState) {
+        self.state = state;
     }
 
     pub fn set_local(&mut self, idx: usize, value: Value) -> Result<(), EvaluateError> {

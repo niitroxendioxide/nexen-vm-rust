@@ -1,5 +1,7 @@
 use std::{cell::RefCell, fmt::Display, io::Error as IoError, rc::Rc};
 
+use crate::vm::modules::ProgramModule;
+
 use super::modules::{Module};
 
 use super::program::{Program, Constant, FunctionBody};
@@ -86,7 +88,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
     let mut functions: Vec<Constant> = Vec::new();
 
     #[allow(unused)]
-    let mut modules: Vec<Rc<Module>> = Vec::new();
+    let mut modules: Vec<ProgramModule> = Vec::new();
     let mut program_instructions = Vec::new();
 
     fn parse_constant(cur_byte: &u8, read_bytes: &Vec<u8>, idx: &mut usize, constants: &mut Vec<Constant>) -> Result<(), FileParsingError> {
@@ -268,7 +270,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
             };
             
             idx += module_size;
-            modules.push(Rc::from(Module::new(reg_vec, Rc::from(module_body), module_functions)));
+            modules.push(Module::new_ref(reg_vec, Rc::from(module_body), module_functions));
 
             module_index+=1;
             continue;

@@ -107,7 +107,8 @@ fn main() {
                 Err(_) => {println!("Bytecode preview is not available"); return;},
             };
             loop {
-                if let Err(e) = parse_instruction(&callframe.instructions, &mut callframe.program_counter) {
+                let mut prog_counter = callframe.program_counter as i64;
+                if let Err(e) = parse_instruction(&callframe.instructions, &mut prog_counter) {
                     println!("Error reading bytecode: {}", e);
                     break;
                 };
@@ -131,20 +132,28 @@ fn main() {
                         if let Ok(op) = OpCode::try_from(*instr) {
                             cf.program_counter += 1;
                             print!("> \x1b[3;30mOn Line:\x1b[0m\n|-> ");
-                            print_op_from_iter(op, &cf.instructions, &mut cf.program_counter)
+                            let mut prog_counter = cf.program_counter as i64;
+                            print_op_from_iter(op, &cf.instructions, &mut prog_counter)
                         }
                     },
                     None => (),
                 };
 
-                if cf.function_id >= 0 {
+                /*if cf.function_id >= 0 {
                     println!("|-> In function F{}", cf.function_id);
-                }
+                } */
 
                 println!("|-> Program pointer at: {}", begin_progc);
                 println!("> \x1b[3;30mRegisters:\x1b[0m");
 
-                for (idx, value) in program.core_module.registers.iter().enumerate() {
+                let current_module = match program.get_current_module() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        println!("Could not retrieve current module, error: {e}");
+                        return;
+                    }
+                };
+                for (idx, value) in current_module.borrow_mut().registers.iter().enumerate() {
                     if let crate::vm::program::Value::Nil = value {
                         continue;
                     }

@@ -12,7 +12,9 @@ use super::opcodes::OpCode;
 #[derive(Debug)]
 pub enum EvaluateError {
     OutOfRange,
+    NoModuleActive,
     InvalidOperation,
+    CircularDependency,
     ArrayIndexNaN,
     UnknownInstruction,
     #[allow(unused)]
@@ -63,6 +65,11 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
         let current_byte = match program.get_call_frame_mut()?.advance() {
             Some(val) => val,
             None => {
+                if program.call_stack.len() > 1 {
+                    program.leave_module_compilation()?;
+                    continue;
+                }
+
                 program.set_running(false);
                 break;
             }
@@ -107,12 +114,12 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                     program.set_local(target_reg, Value::Bool(res))?;
                 } else {
                     let lval = match program.get_local(left_reg)? {
-                        Value::Number(n) => *n, 
+                        Value::Number(n) => n, 
                         _ => return Err(EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8) ),
                     };
 
                     let rval = match program.get_local(right_reg)? {
-                        Value::Number(n) => *n,
+                        Value::Number(n) => n,
                         _ => return Err(EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8) ),
                     };
 
@@ -182,7 +189,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
 
             OpCode::OpJump => {
                 let call_frame = program.get_call_frame_mut()?;
-                let arg = call_frame.read_i32()? as i64;
+                let arg = call_frame.read_i32()? as i128;
                 call_frame.program_counter += arg;
 
                 /*println!("Jumped back by: {}", arg);
@@ -193,9 +200,9 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
 
             OpCode::OpJumpIfFalse | OpCode::OpJumpIfTrue => {
                 let reg = program.get_call_frame_mut()?.read_u8()? as usize;
-                let arg = program.get_call_frame_mut()?.read_i32()? as i64;
+                let arg = program.get_call_frame_mut()?.read_i32()? as i128;
                 let value = program.get_local(reg)?;
-                let jump = if oper == OpCode::OpJumpIfFalse { is_true(value) == false } else { is_true(value) == true };
+                let jump = if oper == OpCode::OpJumpIfFalse { is_true(&value) == false } else { is_true(&value) == true };
                 if jump {
                     let call_frame = program.get_call_frame_mut()?;
                     call_frame.program_counter += arg;
@@ -233,27 +240,30 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let absolute_arg_start = start_reg;
                 let absolute_arg_end = absolute_arg_start + arg_count;
 
-                let args = program.get_mut_slice(absolute_arg_start .. absolute_arg_end)?; /*match program.registers.get_mut(absolute_arg_start..absolute_arg_end) {
+                /*let args = program.get_mut_slice(absolute_arg_start .. absolute_arg_end)?; match program.registers.get_mut(absolute_arg_start..absolute_arg_end) {
                     Some(slice) => slice,
                     None => return Err(EvaluateError::InvalidRegisterIndex),
                 }; */
 
-                let mut temp_output = BufWriter::new(std::io::stdout());
+                program.with_mut_slice(absolute_arg_start .. absolute_arg_end, |program_ref, slice| {
+                    let mut temp_output = BufWriter::new(std::io::stdout());
                 
-                let result = match native_fn_idx {
-                    0x00 => {
-                        stdlib::out::print(&mut temp_output, args, arg_count as u8)?
-                    },
-                    _ => return Err( EvaluateError::UndefinedFunction ),
-                };
+                    let result = match native_fn_idx {
+                        0x00 => {
+                            stdlib::out::print(&mut temp_output, slice, arg_count as u8)?
+                        },
+                        _ => return Err( EvaluateError::UndefinedFunction ),
+                    };
 
-                let cloned = &mut program.std_out;
-                if let Err(e) = cloned.write_all(temp_output.buffer()) {
-                    return Err( EvaluateError::RustIOError(format!("Buffer write failed, reason: {}", e)) )
-                };
+                    let cloned = &mut program_ref.std_out;
+                    if let Err(e) = cloned.write_all(temp_output.buffer()) {
+                        return Err( EvaluateError::RustIOError(format!("Buffer write failed, reason: {}", e)) )
+                    };
 
-                //let current_frame_mut = program.get_call_frame_mut()?;
-                program.set_local(start_reg, result)?;
+                    //let current_frame_mut = program.get_call_frame_mut()?;
+                    program_ref.set_local(start_reg, result)?;
+                    Ok(())
+                })??;
             }
 
             OpCode::OpFunctionCall => {
@@ -275,7 +285,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                     return Err(EvaluateError::RustStackOverflow);
                 } */
 
-                let new_call_frame = CallFrame::new(instructions, fn_idx as i64, new_reg_base, start_reg);
+                let new_call_frame = CallFrame::new(instructions, 0, new_reg_base, start_reg);
                 
                 program.call_stack.push(new_call_frame);
             }
@@ -323,7 +333,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let struct_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
                 let reg_val_loaded  = program.get_call_frame_mut()?.read_u8()? as usize;
                 let idx = match program.get_local(reg_val_loaded)? {
-                    Value::Number(t) => *t,
+                    Value::Number(t) => t,
                     _=> return Err( EvaluateError::ArrayIndexNaN ),
                 } as usize;
                 let value = match program.get_local(struct_reg)? {
