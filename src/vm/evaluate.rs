@@ -33,7 +33,10 @@ pub enum EvaluateError {
     // NoValueProvided,
     #[allow(unused)]
     RustStackOverflow,
+}
 
+pub enum ProgramExitCode {
+    ProgramRanSuccesfully,
 }
 
 impl Display for EvaluateError {
@@ -57,7 +60,7 @@ pub fn is_true(val: &Value) -> bool {
     }
 }
 
-pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
+pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError> {
     program.set_running(true);
 
     while program.is_running() {
@@ -70,6 +73,7 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                     continue;
                 }
 
+                println!("Left at idx: {}", program.get_cur_mod_idx());
                 program.set_running(false);
                 break;
             }
@@ -294,7 +298,10 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
                 let struct_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
                 let field_loaded  = program.get_call_frame_mut()?.read_u8()? as usize;
-                let value = match program.get_local(struct_reg)? {
+                let accessed_str = program.get_local(struct_reg)?;
+                //println!("accessed: {}", accessed_str);
+
+                let value = match accessed_str {
                     Value::Struct(str_ref) => {
                         match str_ref.borrow_mut().values.get(field_loaded) {
                             Some(v) => v.clone(),
@@ -307,6 +314,13 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                             None => Value::Nil
                         }
                     },
+                    Value::Module(module_ref) => {
+                        let mapped_reg = *module_ref.borrow_mut().exports.get(field_loaded).ok_or( EvaluateError::OutOfRange )? as usize;
+                        let local_cloned = module_ref.borrow_mut().get_local(mapped_reg)?.clone();
+
+                        // println!("returning: {}", local_cloned);
+                        local_cloned
+                    }
                     /* */
                     _ => {
                         program.get_call_frame_mut()?.program_counter -= 4;
@@ -321,8 +335,9 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
                 let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
                 let module_idx  = program.get_call_frame_mut()?.read_u32()? as usize;
 
-                println!("\n\x1b[1;31m[TODO WARNING]\x1b[0m\nOP_LOAD_MOD SHOULD ALSO LOAD THE MODULE AND EXECUTE IT IF IT HASN'T BEEN.\n\x1b[1;31m[TODO WARNING]\x1b[0m\n");
+                //println!("\n\x1b[1;31m[TODO WARNING]\x1b[0m\nOP_LOAD_MOD SHOULD ALSO LOAD THE MODULE AND EXECUTE IT IF IT HASN'T BEEN.\n\x1b[1;31m[TODO WARNING]\x1b[0m\n");
                 program.load_mod(dest_reg, module_idx)?;
+                //println!("module?: {}", program.get_local(dest_reg)?);
             }
 
             OpCode::OpLoadGlob => {
@@ -383,5 +398,6 @@ pub fn evaluate(program: &mut Program) -> Result<(), EvaluateError> {
             _ => return Err(EvaluateError::UnknownInstruction)//println!("\x1b[3;30mEvaluating\x1b[0m \x1b[1;29mByte<{:#04x}>\x1b[0m", current_byte),
         }
     }
-    Ok(())
+
+    Ok(ProgramExitCode::ProgramRanSuccesfully)
 }

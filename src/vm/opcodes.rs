@@ -133,7 +133,7 @@ impl Display for OpCode {
     }
 }
 
-pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut i64) {
+pub fn print_op_from_iter(operator: OpCode, instruction_list: &Vec<u8>, index: &mut i128) {
     match operator {
         OpCode::OpVoid => println!("{}", operator),
         OpCode::OpPush0 | OpCode::OpPush1 | OpCode::OpCallReg | OpCode::OpReturn | OpCode::OpPushArray| OpCode::OpDictSet | OpCode::OpPushDict => {

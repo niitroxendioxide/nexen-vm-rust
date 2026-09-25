@@ -18,17 +18,21 @@ impl ProgramSettings {
     }
 }
 
-fn parse_instruction(instruction_list: &Vec<u8>, index: &mut i64) -> Result<(), Error> {
+fn parse_instruction(instruction_list: &Vec<u8>, index: &mut i128) -> Result<(), Error> {
+    //println!("reading byte: {} from list: {:?}", index, instruction_list);
     let value = match instruction_list.get(*index as usize) {
         Some(val) => val.clone(),
         None => return Err(Error),
     };
 
+
+    // println!("printing op! {}", value);
     let res = OpCode::try_from(value);
 
     match res {
         Ok(operator) => {
             *index += 1;
+
             print_op_from_iter(operator, instruction_list, index);
             
             Ok(())
@@ -104,16 +108,20 @@ fn main() {
             println!("\n__start:");
             let callframe = match program.get_call_frame_mut() {
                 Ok(v) => v,
-                Err(_) => {println!("Bytecode preview is not available"); return;},
+                Err(_) => {
+                    println!("Bytecode preview is not available"); 
+                    return;
+                },
             };
+            
+            let mut prog_counter = 0;
             loop {
-                let mut prog_counter = callframe.program_counter as i64;
                 if let Err(e) = parse_instruction(&callframe.instructions, &mut prog_counter) {
                     println!("Error reading bytecode: {}", e);
                     break;
                 };
 
-                if (callframe.program_counter as usize) >= callframe.instructions.len() {
+                if prog_counter >= callframe.instructions.len() as i128 {
                     break;
                 }
             }
@@ -132,7 +140,7 @@ fn main() {
                         if let Ok(op) = OpCode::try_from(*instr) {
                             cf.program_counter += 1;
                             print!("> \x1b[3;30mOn Line:\x1b[0m\n|-> ");
-                            let mut prog_counter = cf.program_counter as i64;
+                            let mut prog_counter = cf.program_counter;
                             print_op_from_iter(op, &cf.instructions, &mut prog_counter)
                         }
                     },

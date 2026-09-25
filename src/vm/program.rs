@@ -313,7 +313,7 @@ impl Program {
         constants: Vec<Constant>, 
         modules: Vec<ProgramModule>,
     ) -> Self {
-        let first_call_frame = CallFrame::new(instructions.clone(), -1, 0, 0);
+        let first_call_frame = CallFrame::new(instructions.clone(), 0, 0, 0);
         let mut call_stack_vec = Vec::with_capacity(50);
         let fn_clone = functions.clone();
         call_stack_vec.push(first_call_frame);
@@ -467,12 +467,12 @@ impl Program {
             None => return Err(EvaluateError::UndefinedModule(module_idx)),
         };
 
+        self.set_local(var_idx, Value::Module(module_obj))?;
+
         if let Some(instructions) = module_instructions {
             self.module_idx.push(module_idx);
             self.push_call_frame(instructions, 0, 0, 0)?;
         }
-
-        self.set_local(var_idx, Value::Module(module_obj))?;
 
         Ok(())
     }
