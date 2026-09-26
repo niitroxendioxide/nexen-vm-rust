@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::fmt::Display;
-use std::io::{BufWriter, Write};
 use std::rc::Rc;
 
-use crate::vm::program::{CallFrame, Constant, VMStruct, Value};
+use crate::vm::modules::ExportType;
+use crate::vm::program::{Constant, VMStruct, Value};
 use crate::vm::stdlib;
 
 use super::program::Program;
@@ -61,6 +61,17 @@ pub fn is_true(val: &Value) -> bool {
     }
 }
 
+fn cast_error(program: &mut Program, bytes_used: i128, err_type: EvaluateError) -> Result<ProgramExitCode, EvaluateError> {
+    program.get_call_frame_mut()?.program_counter -= bytes_used;
+
+    Err(err_type)
+}
+
+fn leave_on_unsupported(program: &mut Program) -> Result<(), EvaluateError> {
+    program.get_call_frame_mut()?.program_counter -= 1;
+    return Err(EvaluateError::InstructionNotImplemented)
+}
+
 pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError> {
     program.set_running(true);
 
@@ -74,7 +85,7 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                     continue;
                 }
 
-                println!("Left at idx: {}", program.get_cur_mod_idx());
+                // println!("Left at idx: {}", program.get_cur_mod_idx());
                 program.set_running(false);
                 break;
             }
@@ -86,11 +97,6 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 return Err(EvaluateError::InvalidOperation);
             },
         };
-
-        fn leave_on_unsupported(program: &mut Program) -> Result<(), EvaluateError> {
-            program.get_call_frame_mut()?.program_counter -= 1;
-            return Err(EvaluateError::InstructionNotImplemented)
-        }
 
         match oper {
             OpCode::OpAdd | OpCode::OpDiv | OpCode::OpEq | OpCode::OpMul | OpCode::OpSub | OpCode::OpGreaterEqualThan | OpCode::OpGreaterThan | OpCode::OpLessThan | OpCode::OpLessEqualThan => {
@@ -125,12 +131,24 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 } else {
                     let lval = match program.get_local(left_reg)? {
                         Value::Number(n) => n, 
-                        _ => return Err(EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8) ),
+                        _ => {
+                            //println!("Left side is: {}, on reg: {}", t, left_reg);
+                            return cast_error(program,
+                                4, 
+                                EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8)
+                            );
+                        },
                     };
 
                     let rval = match program.get_local(right_reg)? {
                         Value::Number(n) => n,
-                        _ => return Err(EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8) ),
+                        _ => {
+                            //println!("Right side is: {}, on reg: {}", t, right_reg);
+                            return cast_error(program,
+                                4, 
+                                EvaluateError::CrossValueOperation(oper, left_reg as u8, right_reg as u8)
+                            )
+                        },
                     };
 
                     // println!("Left {}, Right: {}, Op: {:?}", lval, rval, oper);
@@ -253,25 +271,34 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                     None => return Err(EvaluateError::InvalidRegisterIndex),
                 }; */
 
-                program.with_mut_slice(absolute_arg_start .. absolute_arg_end, |program_ref, slice| {
-                    let mut temp_output = BufWriter::new(std::io::stdout());
+                //println!("Calling native!");
+
+                let result = program.with_mut_slice(absolute_arg_start .. absolute_arg_end, |program_ref, slice| {
+                    //let mut temp_output = BufWriter::new(std::io::stdout());
                 
                     let result = match native_fn_idx {
                         0x00 => {
-                            stdlib::out::print(&mut temp_output, slice, arg_count as u8)?
+                            stdlib::out::print(&mut program_ref.std_out, slice, arg_count as u8)?
                         },
                         _ => return Err( EvaluateError::UndefinedFunction ),
                     };
 
-                    let cloned = &mut program_ref.std_out;
-                    if let Err(e) = cloned.write_all(temp_output.buffer()) {
-                        return Err( EvaluateError::RustIOError(format!("Buffer write failed, reason: {}", e)) )
-                    };
+                    //println!("writing: {:?}", temp_output.buffer());
 
-                    //let current_frame_mut = program.get_call_frame_mut()?;
-                    program_ref.set_local(start_reg, result)?;
-                    Ok(())
+                    /*let cloned = &mut program_ref.std_out;
+                    if let Err(e) = cloned.write(temp_output.buffer()) {
+                        return Err( EvaluateError::RustIOError(format!("Buffer write failed, reason: {}", e)) )
+                    }; */
+
+                    /*println!("printing stdout");
+                    //cloned.flush();
+                    println!("^^^^^stdout"); */
+                    //println!("Output right now: {:?}", cloned.buffer().to_ascii_lowercase());
+
+                    Ok(result)
                 })??;
+
+                program.set_local(start_reg, result)?;
             }
 
             OpCode::OpFunctionCall => {
@@ -292,10 +319,9 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 /*if new_reg_base + fn_reg_count > program.registers.len() {
                     return Err(EvaluateError::RustStackOverflow);
                 } */
-
-                let new_call_frame = CallFrame::new(instructions, 0, new_reg_base, start_reg);
                 
-                program.call_stack.push(new_call_frame);
+                let mod_idx = program.get_cur_mod_idx();
+                program.push_call_frame(instructions, 0, new_reg_base, start_reg, mod_idx)?;
             }
 
             OpCode::OpLoadField => {
@@ -319,11 +345,16 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                         }
                     },
                     Value::Module(module_ref) => {
-                        let mapped_reg = *module_ref.borrow_mut().exports.get(field_loaded).ok_or( EvaluateError::OutOfRange )? as usize;
-                        let local_cloned = module_ref.borrow_mut().get_local(mapped_reg)?.clone();
-
-                        println!("returning: {}", local_cloned);
-                        local_cloned
+                        let export_data = *module_ref.borrow_mut().exports.get(field_loaded).ok_or( EvaluateError::OutOfRange )?;
+                        let mapped_reg = export_data.1 as usize;
+                        let module_id = module_ref.borrow().id;
+                        
+                        if export_data.0 == ExportType::Function 
+                        && let Constant::FunctionConstant(body_ref) = module_ref.borrow_mut().load_function(mapped_reg)? {
+                            Value::Function(body_ref, module_id)
+                        } else {
+                            module_ref.borrow_mut().get_local(mapped_reg)?.clone()
+                        }
                     }
                     /* */
                     _ => {
@@ -344,9 +375,34 @@ pub fn evaluate(program: &mut Program) -> Result<ProgramExitCode, EvaluateError>
                 //println!("module?: {}", program.get_local(dest_reg)?);
             }
 
-            OpCode::OpLoadGlob => leave_on_unsupported(program)?,
-            OpCode::OpCallReg => leave_on_unsupported(program)?,
+            OpCode::OpLoadGlob => {
+                let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let loaded_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let value = program.load_global(loaded_reg)?;
+
+                //println!("Saving value: {} on register: {}", value, dest_reg);
+                program.set_local(dest_reg, value)?;
+            },
             OpCode::OpVoid => leave_on_unsupported(program)?,
+            OpCode::OpCallReg => {
+                let reg_ret  = program.get_call_frame_mut()?.read_u8()? as usize;
+                let func_reg  = program.get_call_frame_mut()?.read_u8()? as usize;
+                
+                //let fn_idx = program.get_call_frame_mut()?.read_u32()? as usize;
+                let (instructions, module_context_id) = match program.get_local(func_reg)? {
+                    Value::Function(body, id) => (
+                        body.instructions.clone(),
+                        id
+                    ),
+                    _ => return Err( EvaluateError::NotAFunction ),
+                };
+
+                let caller_reg_base = program.get_call_frame_mut()?.reg_base;
+                let new_reg_base = caller_reg_base + func_reg + 1;
+                //println!("Reg base is: {}", new_reg_base);
+
+                program.push_call_frame(instructions, 0, new_reg_base, reg_ret, module_context_id)?;
+            },
 
             OpCode::OpLoadIndex => {
                 let dest_reg  = program.get_call_frame_mut()?.read_u8()? as usize;

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::ops::Range;
 
 use crate::vm::evaluate::{EvaluateError};
-use crate::vm::program::{Constant, Instructions, Value};
+use crate::vm::program::{Constant, Instructions, ProgramAccessed, Value};
 
 #[derive(Clone, Debug, PartialEq, Copy)]
 pub enum ModuleState {
@@ -13,25 +13,65 @@ pub enum ModuleState {
     Unvisited,
 }
 
+#[repr(u8)]
+#[derive(Clone, Debug, PartialEq, Copy)]
+pub enum ExportType {
+    Function,
+    Register,
+}
+
+
+pub type Exports = Vec<(ExportType, u8)>;
 
 #[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct Module {
     pub registers: Vec<Value>,
-    pub exports: Vec<u8>,
+    pub exports: Exports,
     pub functions: Vec<Constant>,
     pub body: Instructions,
     pub state: ModuleState,
+    pub id: usize,
 }
 
 pub type ProgramModule = Rc<RefCell<Module>>;
 
+impl From<u8> for ExportType {
+    fn from(value: u8) -> Self {
+        match value {
+            0x09 => ExportType::Function,
+            _ => ExportType::Register,
+        }
+    }
+}
+
 impl Module {
-    pub fn new_ref(exports: Vec<u8>, body: Rc<Vec<u8>>, functions: Vec<Constant>) -> ProgramModule {
+    pub fn new_ref(exports: Exports, body: Rc<Vec<u8>>, functions: Vec<Constant>, id: usize) -> ProgramModule {
         let mut registers = Vec::with_capacity(256);
         registers.resize(256, Value::Nil);
 
-        Rc::from(RefCell::from(Module { registers, exports, body, functions, state: ModuleState::Unvisited }))
+        Rc::from(RefCell::from(Module { 
+            registers, 
+            exports, 
+            body, 
+            functions, 
+            state: ModuleState::Unvisited, 
+            id 
+        }))
+    }
+
+    pub fn load_function(&self, index: usize) -> ProgramAccessed<Constant> {
+        match self.functions.get(index) {
+            Some(constant) => {
+                Ok(constant.clone())
+            },
+            None => Err(EvaluateError::UndefinedFunction),
+        }
+    }
+
+    #[allow(unused)]
+    pub fn set_id(&mut self, id: usize) {
+        self.id = id;
     }
 
     pub fn set_state(&mut self, state: ModuleState) {

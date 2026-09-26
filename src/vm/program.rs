@@ -62,14 +62,16 @@ pub struct ClassBody {
 pub enum Constant {
     BoolConstant(bool) = 0x0,
     NumberConstant(f64) = 0x1,
-    StringConstant(Rc<str>) = 0x02,
-    FunctionConstant(FunctionBody) = 0x03,
-    ArrayConstant(Rc<RefCell<Vec<Constant>>>) = 0x04,
+    StringConstant(ProgramString) = 0x02,
+    FunctionConstant(FunctionBodyRef) = 0x03,
+    ArrayConstant(ArrayConstantRef) = 0x04,
     StringRefConstant(u8) = 0x07,
     RegisterRefConstant(u8) = 0x08,
 }
 
 /* Quick type definitions */
+pub type ProgramString = Rc<str>;
+pub type ArrayConstantRef = Rc<RefCell<Vec<Constant>>>;
 pub type Instructions = Rc<Vec<u8>>;
 pub type CanError = Result<(), EvaluateError>;
 pub type ProgramAccessed<T> = Result<T, EvaluateError>;
@@ -77,19 +79,21 @@ pub type ClassBodyRef = Rc<RefCell<ClassBody>>;
 pub type StructRef = Rc<RefCell<VMStruct>>;
 pub type DictRef = Rc<RefCell<HashMap<Value, Value>>>;
 pub type ArrayRef = Rc<RefCell<Vec<Value>>>;
+pub type FunctionBodyRef = Rc<FunctionBody>;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Value {
     // Short(u16),
     Number(f64),
-    String(Rc<str>),
+    String(ProgramString),
     Bool(bool),
     Array(ArrayRef),
     Dict(DictRef),
     Struct(StructRef),
     Class(ClassBodyRef),
     Module(ProgramModule),
+    Function(FunctionBodyRef, usize),
     Nil,
 }
 
@@ -99,6 +103,7 @@ pub struct CallFrame {
     //pub scope: Rc<RefCell<Scope>>,
     pub reg_base: usize,
     pub reg_ret: usize,
+    pub mod_ctx_id: usize,
     //pub function_id: i64,
 }
 
@@ -108,7 +113,6 @@ pub struct Program {
     pub version_patch: u16,
     pub constant_count: usize,
     pub constants: Vec<Constant>,
-    pub functions: Vec<Constant>,
     pub call_stack: Vec<CallFrame>,
     pub module_idx: Vec<usize>,
     pub modules: Vec<ProgramModule>,
@@ -159,6 +163,7 @@ impl Into<String> for Value {
             Value::Nil => "nil".to_string(),
             Value::Number(f) => f.to_string(),
             Value::Module(md) => format!("<module {:p}>", md),
+            Value::Function(_, _) => "function".to_string(),
             Value::String(str) => String::from(str.clone().to_string()),
         }
     }
@@ -183,7 +188,10 @@ fn value_from_constant(value: &Constant, program: &mut Program) -> Result<Value,
             }
 
             Ok(Value::Array(Rc::from(RefCell::from(array_vec))))
-        }
+        },
+        Constant::FunctionConstant(func) => Ok(Value::Function(func.clone(), program.modules.len())),
+
+        #[allow(unreachable_patterns)]
         _=> Ok(Value::Nil),
     }
 }
@@ -219,6 +227,7 @@ impl Display for Value {
             Value::Dict(refv) => write!(formatter, "\x1b[0;33mRuntime<Dict[{}]>\x1b[0m", refv.borrow().len())?,
             Value::Class(_) => write!(formatter, "\x1b[0;33mRuntime<Class>\x1b[0m")?,
             Value::Module(_) => write!(formatter, "\x1b[0;33mRuntime<Module>\x1b[0m")?,
+            Value::Function(_, _) => write!(formatter, "\x1b[0;33mRuntime<Function>\x1b[0m")?,
             Value::Nil => write!(formatter, "\x1b[0;33mRuntime<Nil>\x1b[0m")?,
         }
         Ok(())
@@ -230,7 +239,8 @@ impl Display for Constant {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Constant::StringConstant(val) => write!(formatter, "\x1b[2;32mString\x1b[0;32m<{}>\x1b[2;32m\x1b[0m", val)?,
-            Constant::FunctionConstant(body) => write!(formatter, "\x1b[2;34mFunction\x1b[0;34m<len: {}, args: {}, body: {:?}>\x1b[2;34m\x1b[0m", body.length, body.argument_count, body.instructions)?,
+            Constant::FunctionConstant(body) => write!(formatter, "\x1b[2;34mFunction\x1b[0;34m<len: {}, args: {}, body: {:?}>\x1b[2;34m\x1b[0m", 
+            body.length, body.argument_count, body.instructions)?,
             _ => write!(formatter, "{:?}", self)?,
         }
         Ok(())
@@ -242,9 +252,10 @@ impl CallFrame {
         instructions: Rc<Vec<u8>>, 
         program_counter: i128, 
         reg_base: usize, 
-        reg_ret: usize
+        reg_ret: usize,
+        mod_ctx_id: usize,
     ) -> Self {
-        CallFrame { program_counter, instructions, reg_base, reg_ret }
+        CallFrame { program_counter, instructions, reg_base, reg_ret, mod_ctx_id }
     }
 
     pub fn read_u32(&mut self) -> Result<u32, EvaluateError> {
@@ -313,10 +324,8 @@ impl Program {
         constants: Vec<Constant>, 
         modules: Vec<ProgramModule>,
     ) -> Self {
-        let first_call_frame = CallFrame::new(instructions.clone(), 0, 0, 0);
-        let mut call_stack_vec = Vec::with_capacity(50);
-        let fn_clone = functions.clone();
-        call_stack_vec.push(first_call_frame);
+        let module_idx_core = modules.len();
+        let core_module = Module::new_ref(vec![], instructions.clone(), functions, module_idx_core);
         
         let mut cur_program = Program { 
             version_major, 
@@ -324,17 +333,21 @@ impl Program {
             version_patch,
             constant_count: constants.len(), 
             constants,
-            functions,
-            call_stack: call_stack_vec,
+            call_stack: Vec::with_capacity(50),
             running_state: false,
-            module_idx: vec![modules.len()],
-            std_out: BufWriter::new(std::io::stdout()),
+            module_idx: vec![module_idx_core],
             modules,
+            std_out: BufWriter::new(std::io::stdout()),
         };
 
-        let core_module = Module::new_ref(vec![], instructions.clone(), fn_clone);
         cur_program.modules.push(core_module);
-        cur_program
+        match cur_program.push_call_frame(instructions, 0, 0, 0, module_idx_core) {
+            Ok(_) => cur_program,
+            Err(e) => {
+                println!("Error when loading mainframe: {e}");
+                panic!("Program main-callframe couldn't be loaded.");
+            }
+        }
     }
 
     pub fn load_constant(&mut self, index: usize) -> ProgramAccessed<Value>/*Result<Value, EvaluateError>*/ {
@@ -345,13 +358,8 @@ impl Program {
         }
     }
 
-    pub fn load_function(&self, index: usize) -> ProgramAccessed<&Constant> {
-        match self.functions.get(index) {
-            Some(constant) => {
-                Ok(constant)
-            },
-            None => Err(EvaluateError::UndefinedFunction),
-        }
+    pub fn load_function(&mut self, index: usize) -> ProgramAccessed<Constant> {
+        self.get_current_module()?.borrow_mut().load_function(index)
     }
 
     pub fn get_call_frame_mut(&mut self) -> ProgramAccessed<&mut CallFrame> {
@@ -425,6 +433,15 @@ impl Program {
         Ok(f(self, slice))
     }
 
+    pub fn load_global(&mut self, idx: usize) -> ProgramAccessed<Value> {
+        let callframe_context = self.get_call_frame_mut()?.mod_ctx_id;
+        let context_module = self.modules.get(callframe_context).ok_or(EvaluateError::NoModuleActive)?;
+        let mut mut_borrow = context_module.borrow_mut();
+        let variable = mut_borrow.get_local(idx)?;
+
+        Ok(variable.clone())
+    }
+
     /*pub fn get_mut_slice(&mut self, idx: Range<usize>) -> Result<&mut [Value], EvaluateError> {
             let reg_base = self.get_call_frame_mut()?.reg_base;
             let new_range = idx.start + reg_base..idx.end + reg_base;
@@ -432,7 +449,7 @@ impl Program {
             self.core_module.get_mut_slice(new_range)
     }*/
 
-    pub fn take_local(&mut self, idx: usize) -> Result<Value, EvaluateError> {
+    pub fn take_local(&mut self, idx: usize) -> ProgramAccessed<Value> {
         let reg_base = self.get_call_frame_mut()?.reg_base;
         self.get_current_module()?.borrow_mut().take_local(reg_base + idx)
         //self.scope.borrow_mut().get((idx + self.base) as u8)
@@ -471,14 +488,14 @@ impl Program {
 
         if let Some(instructions) = module_instructions {
             self.module_idx.push(module_idx);
-            self.push_call_frame(instructions, 0, 0, 0)?;
+            self.push_call_frame(instructions, 0, 0, 0, module_idx)?;
         }
 
         Ok(())
     }
 
-    pub fn push_call_frame(&mut self, instructions: Instructions, pc: i128, reg_base: usize, reg_ret: usize) -> Result<(), EvaluateError> {
-        let new_frame = CallFrame::new(instructions, pc, reg_base, reg_ret);
+    pub fn push_call_frame(&mut self, instructions: Instructions, pc: i128, reg_base: usize, reg_ret: usize, mod_ctx_id: usize) -> Result<(), EvaluateError> {
+        let new_frame = CallFrame::new(instructions, pc, reg_base, reg_ret, mod_ctx_id);
         self.call_stack.push(new_frame);
 
         Ok(())

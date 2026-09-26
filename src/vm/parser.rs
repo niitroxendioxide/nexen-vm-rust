@@ -1,6 +1,6 @@
 use std::{cell::RefCell, fmt::Display, io::Error as IoError, rc::Rc};
 
-use crate::vm::modules::ProgramModule;
+use crate::vm::modules::{ExportType, Exports, ProgramModule};
 
 use super::modules::{Module};
 
@@ -189,7 +189,8 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
         };//[idx..end_idx];
 
         let new_fn = FunctionBody::new(fn_len as u32, *arg_count, *reg_count, &fn_slice);
-        functions.push(Constant::FunctionConstant(new_fn));
+        let rc_ref = Rc::from(new_fn);
+        functions.push(Constant::FunctionConstant(rc_ref));
         
         *idx += fn_len;
         Ok(())
@@ -236,15 +237,21 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
             idx += 4;
             // println!("Module: {module_index} has {export_count} exports, {func_count} functions & {module_size} bytes of __start");
 
-            let mut reg_vec: Vec<u8> = Vec::with_capacity(export_count);
+            let mut reg_vec: Exports = Vec::with_capacity(export_count);
             for exp_idx in 0..export_count {
-                let reg = *read_bytes.get(idx + (exp_idx as usize) + 1)
+                let first_byte = *read_bytes.get(idx + (exp_idx as usize) + 1).ok_or(
+                    FileParsingError::InvalidDeclaredModule(format!("No type for Export [\x1b[1;33m{}\x1b[0m]", idx + exp_idx as usize))
+                )?;
+        
+                let export_type = ExportType::from(first_byte);
+
+                let reg = *read_bytes.get(idx + (exp_idx as usize) + 2)
                     .ok_or(FileParsingError::InvalidDeclaredModule(
-                        format!("No value for export EX{}", idx + exp_idx as usize),
+                        format!("No value assigned to export [\x1b[1;33m{}\x1b[0m]", idx + exp_idx as usize),
                     ) )?;
 
-                reg_vec.push(reg);
-                idx += 2;
+                reg_vec.push((export_type, reg));
+                idx += 3;
             }
 
             //let mut mod_func_idx = 0;
@@ -270,7 +277,7 @@ pub fn parse_file(file_name: String) -> Result<Program, FileParsingError> {
             };
             
             idx += module_size;
-            modules.push(Module::new_ref(reg_vec, Rc::from(module_body), module_functions));
+            modules.push(Module::new_ref(reg_vec, Rc::from(module_body), module_functions, module_index as usize));
 
             module_index+=1;
             continue;

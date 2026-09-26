@@ -32,6 +32,7 @@ pub fn tostring(value: &Value) -> Value {
             let ptrfm = format!("<array {:p}>", vec.as_ptr());
             Value::String(Rc::from(ptrfm))
         }, 
+        Value::Function(_, _) => Value::String(Rc::from("function")),
     }
 }
 

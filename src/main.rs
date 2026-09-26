@@ -87,7 +87,16 @@ fn main() {
         if new_program_settings.preview_bytecode {
             //let mut idx = 0;
             let mut fn_idx = 0;
-            for function in &program.functions {
+            let main_module = match program.get_current_module() {
+                Ok(v) => v,
+                Err(e) => {
+                    println!("Error when loading module's functions: {e}");
+                    return;
+                }
+            };
+            let borrowed_module = main_module.borrow();
+
+            for function in &borrowed_module.functions {
                 if let Constant::FunctionConstant(body) = function {
                     println!("\n__function_F{fn_idx}:");
                     let mut idx = 0;
