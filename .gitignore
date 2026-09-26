@@ -26,3 +26,5 @@ target
 /target
 /output
 .env
+/non-compiled/
+*.nxo
